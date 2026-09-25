@@ -370,7 +370,7 @@ const createPlugin = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.1.0",
+        version: "1.1.1",
         configDir: "",
         routes: () => routes,
         ownsContentId: (type, id) => type === "tv" && isChannelId(id),

@@ -3,7 +3,7 @@
         "target": "ES2022",
         "module": "ES2022",
         "moduleResolution": "bundler",
-        "outDir": "dist/scrapers",
+        "outDir": "dist/bundled-scrapers",
         "rootDir": "scrapers",
         "strict": true,
         "noUncheckedIndexedAccess": true,

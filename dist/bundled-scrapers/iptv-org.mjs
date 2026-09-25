@@ -5,7 +5,7 @@
  * plain archived copy of an earlier version of this file remains there for
  * reference, see that repo's README).
  *
- * `npm run build` here compiles this to `dist/scrapers/iptv-org.mjs`,
+ * `npm run build` here compiles this to `dist/bundled-scrapers/iptv-org.mjs`,
  * shipped alongside `dist/plugin.mjs` itself. `src/default-scraper.ts`
  * copies that compiled file into a fresh deployment's `<configDir>/scrapers/`
  * the first time it finds nothing there, and updates it later only when
