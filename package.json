@@ -1,0 +1,21 @@
+{
+    "name": "stremio-tv-plugin-live-tv",
+    "version": "1.0.0",
+    "description": "Live TV plugin for stremio-tv: channels, scrapers, and HLS relay, loaded as a dropped-in StremioTvPlugin",
+    "private": true,
+    "type": "module",
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "build": "tsc -p tsconfig.json && mv dist/plugin.js dist/plugin.mjs && cp plugin.json dist/plugin.json",
+        "dev": "tsc -p tsconfig.json --watch",
+        "check": "tsc -p tsconfig.json --noEmit",
+        "test": "node test/scraper-config.mjs && node test/github-import.mjs && node test/channels.mjs && node test/codecs.mjs && node test/reputation.mjs && node test/scrapers.mjs && node test/rails.mjs"
+    },
+    "devDependencies": {
+        "@types/node": "^22.10.2",
+        "typescript": "^5.7.2"
+    },
+    "dependencies": {}
+}
