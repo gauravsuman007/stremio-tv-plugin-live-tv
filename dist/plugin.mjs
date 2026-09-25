@@ -11,9 +11,8 @@
  * `PluginRouteContext`/`PluginResponse`, and every stremio-tv import
  * became a `host` call.
  */
-import { mkdirSync, readdirSync } from "node:fs";
 import { setHost } from "./host.js";
-import { pluginConfig, initPluginConfig } from "./plugin-config.js";
+import { initPluginConfig } from "./plugin-config.js";
 import { escape } from "./render.js";
 import { channelIndex, channelMeta, channelStreamList, channelsIn, codecFor, countryNamed, findChannel, forgetChannels, isChannelId, liveRails, loadChecks, rankReachability, searchChannels } from "./channels.js";
 import { channelSearchPage, countryPage, livePage } from "./pages/tv.js";
@@ -21,19 +20,11 @@ import { arrange, moved, railsPage, visibleRails } from "./pages/rails.js";
 import { forgetGithubSource, importFromGithub, importFromStoredSource, listGithubSources, rememberGithubSource } from "./github-import.js";
 import { importSummary as describeImport, scraperConfigPage, scrapersPage } from "./pages/scrapers.js";
 import { allScrapers, lastRun, loadDynamicScrapers, scraperEnabled, setScraperEnabled } from "./scrapers.js";
+import { seedOrUpdateDefaultScraper } from "./default-scraper.js";
 import { getScraperConfig, setScraperConfig } from "./scraper-config.js";
 import { startScraperScheduler } from "./scraper-scheduler.js";
 import { lastTaskRun, runScraperTask } from "./scraper-tasks.js";
 import { scheduleSweep, sweep, sweepState } from "./sweep.js";
-/**
- * The IPTV scraper this plugin ships with -- not vendored into `dist/`,
- * pulled in on load (and re-checked on every load) the same way
- * `github-import.ts` pulls a scraper an operator adds by hand. A
- * placeholder: this repository does not exist yet, so the pull is a
- * harmless no-op (a 404, caught and logged) until it does. See the
- * plan's Part 2 note and this plugin's own README.
- */
-const DEFAULT_SCRAPER_REPO = "gauravsuman007/stremio-tv-live-scraper";
 const COUNTRY_PAGE = 60;
 function html(body, status = 200) {
     return { status, body };
@@ -73,12 +64,16 @@ const createPlugin = (host, configDir) => {
     setHost(host);
     initPluginConfig(configDir);
     /*
-        Kicked off here, not awaited -- a slow or unreachable default-
-        scraper repo must never delay stremio-tv's boot. `configDir` (and
-        so `pluginConfig.scrapersDir`) is set above, before this runs.
+        Kicked off here, not awaited -- seeding/updating the bundled
+        default scraper is a plain file copy (see default-scraper.ts), but
+        still must never delay stremio-tv's boot. `configDir` (and so
+        `pluginConfig.scrapersDir`) is set above, before this runs.
+        `loadDynamicScrapers()` is chained after it so a freshly seeded or
+        updated file is picked up on this same boot rather than the next.
     */
-    void pullDefaultScraper().catch((cause) => console.error("live-tv: default scraper pull failed", cause));
-    void loadDynamicScrapers();
+    void seedOrUpdateDefaultScraper()
+        .catch((cause) => console.error("live-tv: seeding/updating the default scraper failed", cause))
+        .then(() => loadDynamicScrapers());
     /*
         Ported from stremio-tv's own boot sequence (`index.ts`'s
         `server.listen` callback, before Live TV was a plugin): warming
@@ -372,31 +367,6 @@ const createPlugin = (host, configDir) => {
             }
         }
     ];
-    /*
-        THE DEFAULT SCRAPER, PULLED IN ON LOAD.
-
-        `DEFAULT_SCRAPER_REPO` does not exist yet -- see its own comment --
-        so this is a harmless no-op (caught and logged, never thrown) until
-        it does. On a real deployment this is what puts iptv-org (or
-        whatever the default becomes) into `configDir/scrapers/` without
-        it having been baked into this plugin's own `dist/`.
-    */
-    async function pullDefaultScraper() {
-        try {
-            mkdirSync(pluginConfig.scrapersDir, { recursive: true });
-            const already = new Set(readdirSync(pluginConfig.scrapersDir).filter((name) => /\.m?js$/.test(name)));
-            const slash = DEFAULT_SCRAPER_REPO.indexOf("/");
-            const owner = DEFAULT_SCRAPER_REPO.slice(0, slash);
-            const repo = DEFAULT_SCRAPER_REPO.slice(slash + 1);
-            const result = await importFromGithub(owner, repo, "");
-            if (result.imported.length || result.updated.length || already.size === 0) {
-                console.log(`live-tv: default scraper (${DEFAULT_SCRAPER_REPO}) ${describeImport(result)}`);
-            }
-        }
-        catch (cause) {
-            console.error(`live-tv: could not pull the default scraper from ${DEFAULT_SCRAPER_REPO} -- this is expected until that repository exists`, cause);
-        }
-    }
     return {
         id: "live-tv",
         name: "Live TV",
