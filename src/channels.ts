@@ -788,6 +788,16 @@ export function saveChecks(): void {
     }
 }
 
+/** Called from the plugin's `dispose()`: writes what is pending now
+ *  rather than losing it with the discarded module. */
+export function flushChecks(): void {
+    if (!pendingWrite) return;
+
+    clearTimeout(pendingWrite);
+    pendingWrite = null;
+    saveChecks();
+}
+
 function scheduleSave(): void {
     if (!config.liveChecks || pendingWrite) return;
 

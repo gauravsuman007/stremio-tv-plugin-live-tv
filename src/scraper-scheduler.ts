@@ -49,10 +49,22 @@ async function tick(): Promise<void> {
 }
 
 let started = false;
+let handle: NodeJS.Timeout | null = null;
 
 export function startScraperScheduler(): void {
     if (started) return;
 
     started = true;
-    setInterval(() => void tick().catch((cause) => console.error("stremio-tv: scraper scheduler tick failed", cause)), TICK_MS).unref();
+    handle = setInterval(() => void tick().catch((cause) => console.error("stremio-tv: scraper scheduler tick failed", cause)), TICK_MS);
+    handle.unref();
+}
+
+/** Called from the plugin's `dispose()`: a reloaded plugin gets a fresh
+ *  copy of this module, and the old copy's interval would otherwise keep
+ *  ticking beside the new one. */
+export function stopScraperScheduler(): void {
+    if (handle) clearInterval(handle);
+
+    handle = null;
+    started = false;
 }

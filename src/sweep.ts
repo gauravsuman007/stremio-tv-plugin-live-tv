@@ -225,14 +225,14 @@ export async function sweep(): Promise<void> {
 
     async function worker(): Promise<void> {
         for (;;) {
-            if (Date.now() > deadline) return;
+            if (halted || Date.now() > deadline) return;
 
             const queue = hosts[at++];
 
             if (!queue) return;
 
             for (const stream of queue) {
-                if (Date.now() > deadline) return;
+                if (halted || Date.now() > deadline) return;
 
                 try {
                     if (await verify(stream, proxy)) found += 1;
@@ -250,7 +250,7 @@ export async function sweep(): Promise<void> {
 
     clearInterval(ticker);
 
-    if (Date.now() > deadline) {
+    if (halted || Date.now() > deadline) {
         console.error(
             `stremio-tv: live sweep hit its ${Math.round(WHOLE_SWEEP_MS / 60_000)} min deadline ` +
                 `with ${tried} of ${total} sources asked -- the deep pass will be short`
@@ -400,7 +400,7 @@ export async function nameCodecs(
 
     async function worker(): Promise<void> {
         for (;;) {
-            if (Date.now() > deadline) return;
+            if (halted || Date.now() > deadline) return;
 
             const stream = queue[at++];
 
@@ -501,14 +501,14 @@ export async function deepen(
 
     async function worker(): Promise<void> {
         for (;;) {
-            if (Date.now() > deadline) return;
+            if (halted || Date.now() > deadline) return;
 
             const queue = hosts[at++];
 
             if (!queue) return;
 
             for (const stream of queue) {
-                if (Date.now() > deadline) return;
+                if (halted || Date.now() > deadline) return;
 
                 try {
                     if (await deepVerify(stream, proxy)) proven += 1;
@@ -542,6 +542,20 @@ export async function deepen(
  * one thing the hour was chosen to avoid. The store on disk is what covers
  * the gap.
  */
+let halted = false;
+let sweepTimer: NodeJS.Timeout | null = null;
+
+/** Called from the plugin's `dispose()`. Cancels the next nightly run and
+ *  makes any pass already in flight stop at its next source, so a plugin
+ *  replaced mid-sweep does not carry on beside its successor. */
+export function stopSweep(): void {
+    halted = true;
+
+    if (sweepTimer) clearTimeout(sweepTimer);
+
+    sweepTimer = null;
+}
+
 export function scheduleSweep(): void {
     if (config.liveSweepHour < 0 || config.liveSweepHour > 23) {
         console.log("stremio-tv: nightly live sweep is off");
@@ -559,7 +573,9 @@ export function scheduleSweep(): void {
     };
 
     const arm = (): void => {
-        const timer = setTimeout(() => {
+        if (halted) return;
+
+        const timer = sweepTimer = setTimeout(() => {
             void sweep().catch((cause) => console.error("stremio-tv: live sweep failed", cause));
             arm();
         }, next());

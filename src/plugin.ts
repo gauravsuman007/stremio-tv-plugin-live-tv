@@ -32,6 +32,7 @@ import {
     rankReachability,
     searchChannels,
     warmChannel,
+    flushChecks,
     type Channel
 } from "./channels.js";
 import { channelSearchPage, countryPage, livePage } from "./pages/tv.js";
@@ -49,9 +50,9 @@ import { importSummary as describeImport, scraperConfigPage, scrapersPage, type 
 import { allScrapers, lastRun, loadDynamicScrapers, scraperEnabled, setScraperEnabled } from "./scrapers.js";
 import { seedOrUpdateDefaultScraper } from "./default-scraper.js";
 import { getScraperConfig, setScraperConfig } from "./scraper-config.js";
-import { startScraperScheduler } from "./scraper-scheduler.js";
+import { startScraperScheduler, stopScraperScheduler } from "./scraper-scheduler.js";
 import { lastTaskRun, runScraperTask } from "./scraper-tasks.js";
-import { scheduleSweep, sweep, sweepState } from "./sweep.js";
+import { scheduleSweep, stopSweep, sweep, sweepState } from "./sweep.js";
 
 import type { PluginFactory, PluginRoute, PluginRouteContext } from "./plugin-types.js";
 import type { LiveStream, MetaDetail, Sourced, Stream } from "./types.js";
@@ -502,8 +503,13 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.1.1",
+        version: "1.1.2",
         configDir: "",
+        dispose() {
+            stopScraperScheduler();
+            stopSweep();
+            flushChecks();
+        },
         routes: () => routes,
         ownsContentId: (type, id) => type === "tv" && isChannelId(id),
         async metaFor(type, id) {
