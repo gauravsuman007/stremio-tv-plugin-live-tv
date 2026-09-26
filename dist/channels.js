@@ -529,6 +529,15 @@ export function saveChecks() {
         console.error("stremio-tv: could not write the live-check store", cause);
     }
 }
+/** Called from the plugin's `dispose()`: writes what is pending now
+ *  rather than losing it with the discarded module. */
+export function flushChecks() {
+    if (!pendingWrite)
+        return;
+    clearTimeout(pendingWrite);
+    pendingWrite = null;
+    saveChecks();
+}
 function scheduleSave() {
     if (!config.liveChecks || pendingWrite)
         return;

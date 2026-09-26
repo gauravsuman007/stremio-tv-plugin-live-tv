@@ -14,7 +14,7 @@
 import { setHost } from "./host.js";
 import { initPluginConfig } from "./plugin-config.js";
 import { escape } from "./render.js";
-import { channelIndex, channelMeta, channelStreamList, channelsIn, codecFor, countryNamed, findChannel, forgetChannels, isChannelId, liveRails, loadChecks, rankReachability, searchChannels } from "./channels.js";
+import { channelIndex, channelMeta, channelStreamList, channelsIn, codecFor, countryNamed, findChannel, forgetChannels, isChannelId, liveRails, loadChecks, rankReachability, searchChannels, flushChecks } from "./channels.js";
 import { channelSearchPage, countryPage, livePage } from "./pages/tv.js";
 import { arrange, moved, railsPage, visibleRails } from "./pages/rails.js";
 import { forgetGithubSource, importFromGithub, importFromStoredSource, listGithubSources, rememberGithubSource } from "./github-import.js";
@@ -22,9 +22,9 @@ import { importSummary as describeImport, scraperConfigPage, scrapersPage } from
 import { allScrapers, lastRun, loadDynamicScrapers, scraperEnabled, setScraperEnabled } from "./scrapers.js";
 import { seedOrUpdateDefaultScraper } from "./default-scraper.js";
 import { getScraperConfig, setScraperConfig } from "./scraper-config.js";
-import { startScraperScheduler } from "./scraper-scheduler.js";
+import { startScraperScheduler, stopScraperScheduler } from "./scraper-scheduler.js";
 import { lastTaskRun, runScraperTask } from "./scraper-tasks.js";
-import { scheduleSweep, sweep, sweepState } from "./sweep.js";
+import { scheduleSweep, stopSweep, sweep, sweepState } from "./sweep.js";
 const COUNTRY_PAGE = 60;
 function html(body, status = 200) {
     return { status, body };
@@ -370,8 +370,13 @@ const createPlugin = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.1.1",
+        version: "1.1.2",
         configDir: "",
+        dispose() {
+            stopScraperScheduler();
+            stopSweep();
+            flushChecks();
+        },
         routes: () => routes,
         ownsContentId: (type, id) => type === "tv" && isChannelId(id),
         async metaFor(type, id) {
