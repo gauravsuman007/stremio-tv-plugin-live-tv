@@ -86,6 +86,9 @@ export async function seedOrUpdateDefaultScraper() {
         return;
     }
     if (!existsSync(targetPath)) {
+        // Deleted from the sources page on purpose: seed once means once.
+        if (existsSync(join(pluginConfig.scrapersDir, `${DEFAULT_SCRAPER_ID}.deleted`)))
+            return;
         writeFileSync(targetPath, readFileSync(bundledPath));
         console.log(`live-tv: seeded the default scraper (${DEFAULT_SCRAPER_ID}) v${bundled.version || "?"}`);
         return;

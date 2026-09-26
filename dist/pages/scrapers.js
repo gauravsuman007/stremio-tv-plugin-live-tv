@@ -13,6 +13,8 @@
  * `docs/scraper-template.ts` in the repository.
  */
 import { chrome, escape, page, vpnBadge, vpnSheet } from "../render.js";
+/** Drawn, not a character: a set's fonts may not carry U+2699 (see AGENTS.md). */
+const GEAR = `<svg class="gear" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>`;
 function since(at) {
     if (!at)
         return "not yet run";
@@ -46,16 +48,19 @@ export function scrapersPage(client, signedIn, rows, githubSources = [], importN
             : row.run.ok
                 ? `${row.run.channels} channel${row.run.channels === 1 ? "" : "s"}, ${since(row.run.at)}`
                 : `failed ${since(row.run.at)}: ${row.run.error}`;
-        const toggle = row.sole
-            ? `<span class="step off">${row.enabled ? "On" : "Off"} &mdash; the only source configured</span>`
-            : `<a class="step" href="${escape(`${client.link("/tv/scrapers")}?${row.enabled ? "off" : "on"}=${encodeURIComponent(row.id)}`)}">${row.enabled ? "Switch off" : "Switch on"}</a>`;
+        const toggle = `<a class="step" href="${escape(`${client.link("/tv/scrapers")}?${row.enabled ? "off" : "on"}=${encodeURIComponent(row.id)}`)}">${row.enabled ? "Disable" : "Enable"}</a>`;
+        // A dialog needs a script and a page may carry only one, so the
+        // confirmation is the browser's own, attached inline.
+        const remove = row.removable
+            ? `<form method="POST" action="${escape(client.link("/tv/scrapers/delete"))}" style="display:inline" onsubmit="return confirm('Delete ${escape(row.name).replace(/'/g, "")} and its settings? This cannot be undone.')"><input type="hidden" name="id" value="${escape(row.id)}"><button class="step" type="submit">Delete</button></form>`
+            : "";
         const gear = row.configurable
-            ? `<a class="step" title="Settings" href="${escape(client.link(`/tv/scrapers/${encodeURIComponent(row.id)}/config`))}">&#9881;</a>`
+            ? `<a class="step" title="Settings" href="${escape(client.link(`/tv/scrapers/${encodeURIComponent(row.id)}/config`))}">${GEAR}</a>`
             : "";
         return `<li class="railrow${row.enabled ? "" : " railoff"}">
 <span class="railname">${escape(row.name)}${row.version ? ` <span class="railsay">v${escape(row.version)}</span>` : ""}</span>
 <span class="railsay">${escape(status)}</span>
-<span class="railacts">${gear}${toggle}</span>
+<span class="railacts">${gear}${toggle}${remove}</span>
 </li>`;
     })
         .join("\n");
@@ -79,7 +84,9 @@ export function scrapersPage(client, signedIn, rows, githubSources = [], importN
 </li>`;
     })
         .join("\n");
-    const vpnPanel = vpnBadge(vpn) + vpnSheet(vpn, client.link("/vpn"), "/tv/scrapers");
+    // `.routing` is what the sheet is positioned against; without it the sheet lands on the nav bar.
+    const rawVpn = vpnBadge(vpn) + vpnSheet(vpn, client.link("/vpn"), "/tv/scrapers");
+    const vpnPanel = rawVpn ? `<section class="routing">${rawVpn}</section>` : "";
     return page({
         title: "Live TV Sources",
         body: `${chrome(client, "live", signedIn)}

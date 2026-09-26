@@ -19,7 +19,7 @@ import { channelSearchPage, countryPage, livePage } from "./pages/tv.js";
 import { arrange, moved, railsPage, visibleRails } from "./pages/rails.js";
 import { forgetGithubSource, importFromGithub, importFromStoredSource, listGithubSources, rememberGithubSource } from "./github-import.js";
 import { importSummary as describeImport, scraperConfigPage, scrapersPage } from "./pages/scrapers.js";
-import { allScrapers, lastRun, loadDynamicScrapers, scraperEnabled, setScraperEnabled } from "./scrapers.js";
+import { allScrapers, builtinScraperIds, deleteScraper, lastRun, loadDynamicScrapers, scraperEnabled, setScraperEnabled } from "./scrapers.js";
 import { seedOrUpdateDefaultScraper } from "./default-scraper.js";
 import { getScraperConfig, setScraperConfig } from "./scraper-config.js";
 import { startScraperScheduler, stopScraperScheduler } from "./scraper-scheduler.js";
@@ -94,7 +94,7 @@ const createPlugin = (host, configDir) => {
             id: scraper.id,
             name: scraper.name,
             enabled: scraperEnabled(scraper.id),
-            sole: all.length === 1,
+            removable: !builtinScraperIds().includes(scraper.id),
             run: lastRun(scraper.id),
             version: scraper.version,
             configurable: Boolean(scraper.configSchema?.length || scraper.tasks?.length)
@@ -186,6 +186,16 @@ const createPlugin = (host, configDir) => {
                     return redirect(ctx.client, "/tv/scrapers");
                 }
                 return sendScrapersPage(ctx.client, signedIn, ctx.client.session, null);
+            }
+        },
+        {
+            method: "POST",
+            path: "/tv/scrapers/delete",
+            async handle(ctx) {
+                const id = String(ctx.form.get("id") || "");
+                if (deleteScraper(id))
+                    forgetChannels();
+                return redirect(ctx.client, "/tv/scrapers");
             }
         },
         {
@@ -445,7 +455,8 @@ const createPlugin = (host, configDir) => {
             const channels = await searchChannels(query, limit);
             return channels.map((channel) => ({ id: channel.id, name: channel.name, logo: channel.logo }));
         },
-        settingsLink: { label: "Live TV", href: "/tv" }
+        // Its settings are the sources page; "/tv" is the channel guide.
+        settingsLink: { label: "Live TV", href: "/tv/scrapers" }
     };
 };
 export default createPlugin;
