@@ -253,4 +253,26 @@ check(
     !scrapers.allScrapers().some((s) => s.id === "dropped-in")
 );
 
+/* ---- deleting one ------------------------------------------------------- */
+
+{
+    const { existsSync } = await import("node:fs");
+    const file = join(dropDir, "doomed.mjs");
+
+    writeFileSync(file, `export default { id: "doomed", name: "Doomed", async build() { return { channels: [] }; } };`);
+    writeFileSync(join(dropDir, "doomed.config.json"), "{}");
+    await scrapers.loadDynamicScrapers();
+    scrapers.setScraperEnabled("doomed", false);
+
+    check("the dropped-in scraper is loaded", scrapers.allScrapers().some((s) => s.id === "doomed"));
+    check("an unknown id cannot be deleted", scrapers.deleteScraper("nobody") === false);
+    check("delete reports success", scrapers.deleteScraper("doomed") === true);
+    check("its file is gone", !existsSync(file));
+    check("its stored settings are gone", !existsSync(join(dropDir, "doomed.config.json")));
+    check("it is gone from the registry", !scrapers.allScrapers().some((s) => s.id === "doomed"));
+    check("its off-switch is forgotten, so a re-import starts enabled", scrapers.scraperEnabled("doomed"));
+    check("a marker stops a bundled default being seeded straight back", existsSync(join(dropDir, "doomed.deleted")));
+    check("a reload does not resurrect it", (await scrapers.loadDynamicScrapers(), !scrapers.allScrapers().some((s) => s.id === "doomed")));
+}
+
 console.log(`PASSED: ${checks} scraper-plugin checks`);

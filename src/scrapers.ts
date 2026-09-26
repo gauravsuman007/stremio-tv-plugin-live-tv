@@ -27,7 +27,7 @@
  * in by, and nothing downstream needs to know.
  */
 
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -51,6 +51,9 @@ const BUILTIN: Scraper[] = [];
 
 /** Every scraper found in `config.scrapersDir` on the last (re)load. */
 let dynamic: Scraper[] = [];
+
+/** Which file each dropped-in scraper came from, so Delete knows what to remove. */
+const fileOf = new Map<string, string>();
 
 let override: Scraper[] | null = null;
 
@@ -89,6 +92,7 @@ let reloadCounter = 0;
 
 export async function loadDynamicScrapers(): Promise<void> {
     const found: Scraper[] = [];
+    const foundFiles = new Map<string, string>();
     const cacheBust = ++reloadCounter;
 
     if (config.scrapersDir) {
@@ -123,6 +127,7 @@ export async function loadDynamicScrapers(): Promise<void> {
                 }
 
                 found.push(candidate);
+                foundFiles.set(candidate.id, file);
             } catch (cause) {
                 console.error(`stremio-tv: could not load scraper from ${file}`, cause);
             }
@@ -130,6 +135,8 @@ export async function loadDynamicScrapers(): Promise<void> {
     }
 
     dynamic = found;
+    fileOf.clear();
+    for (const [id, file] of foundFiles) fileOf.set(id, file);
 }
 
 /** Swap the registry for a fake one, so the merge logic in channels.ts can
@@ -196,6 +203,33 @@ export function setScraperEnabled(id: string, on: boolean): void {
     ensureLoaded();
     enabled.set(id, on);
     persist();
+}
+
+/**
+ * Remove a dropped-in or GitHub-imported scraper: its file, its stored
+ * settings (`<id>.config.json`) and its on/off state. An image-built one
+ * cannot be removed and answers false. The caller forgets the channel index
+ * afterwards -- this module does not know about it.
+ */
+export function deleteScraper(id: string): boolean {
+    const file = fileOf.get(id);
+
+    if (!file || !config.scrapersDir) return false;
+
+    rmSync(`${config.scrapersDir}/${file}`, { force: true });
+    rmSync(`${config.scrapersDir}/${id}.config.json`, { force: true });
+    // Tells the boot-time seeding of a bundled default that this was removed
+    // on purpose, or the next restart would put it straight back.
+    writeFileSync(`${config.scrapersDir}/${id}.deleted`, "");
+
+    fileOf.delete(id);
+    dynamic = dynamic.filter((scraper) => scraper.id !== id);
+    ensureLoaded();
+    enabled.delete(id);
+    persist();
+    runs.delete(id);
+
+    return true;
 }
 
 /** What happened the last time a scraper ran, for the settings page. */

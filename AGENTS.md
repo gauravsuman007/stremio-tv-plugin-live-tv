@@ -20,3 +20,7 @@ function called from there -- today: the scraper scheduler, the nightly sweep
 (and any pass in flight, via `halted`), and the pending check-store write,
 which is flushed rather than dropped. Bump the version in `plugin.json` and
 `src/plugin.ts` together.
+
+## Deleting a scraper, and why the default one stays deleted
+
+`deleteScraper` (`scrapers.ts`) removes the file, `<id>.config.json` and the on/off state, then the route forgets the channel index. It also writes `<id>.deleted`: the bundled iptv-org default is re-seeded whenever its file is missing, so without the marker a Delete undid itself at the next restart. The marker only stops *seeding*; importing the same id from GitHub still installs it. The old "only source configured" lock is gone -- switching off or deleting the last source is the operator's call, and a page with no channels says why. The settings link on the plugin list points at `/tv/scrapers`, not `/tv` (that is the guide, which is where it used to land).
