@@ -1,5 +1,32 @@
 # Working on stremio-tv-plugin-live-tv
 
+## Every behavior change bumps the version -- in BOTH places, together
+
+`plugin.json`'s `version` is what stremio-tv's importer compares to decide
+whether "Check for updates" installs anything at all (a re-import only
+ever replaces a numerically GREATER version, never an equal or lower one
+-- see "dist/ is built by CI" below). `src/plugin.ts`'s returned
+`StremioTvPlugin.version` is a second, independent copy of the same
+number, read at runtime (Settings shows it, logs reference it) --
+**the two must always read the same value**, or an operator sees one
+number on the page and another in "Check for updates", with no way to
+tell which is real. Bump both, in the same commit, for ANY change to this
+repository's behavior -- not only a `dispose()`-relevant one:
+
+- A user-visible behavior change (ranking, merging, a new page, a new
+  badge) -- self-evidently.
+- An internal-only change with no visible effect that a NEXT importer
+  should still pick up (a bug fix in `channels.ts`, a contract-doc-only
+  change) -- version exists to let "Check for updates" do anything at
+  all; an unbumped version means it silently keeps running the OLD copy
+  forever, indistinguishable from "nothing changed."
+
+This was missed once already (a commit landed `plugin.json` at "1.2.0"
+while `src/plugin.ts`'s own `version` field stayed at "1.1.2" -- fixed
+alongside this note, both now read the same number). Check both files
+are equal before every push, not just after a change you think of as
+"a version-worthy one."
+
 ## dist/ is built by CI, never locally
 
 stremio-tv's plugin importer (Settings > Plugins > Import from GitHub) reads the compiled `dist/` (`plugin.mjs` + `plugin.json`) from this repo's main branch. There is no build step on the consuming side, so `dist/` has to be committed -- but **only by CI**.
@@ -20,6 +47,37 @@ function called from there -- today: the scraper scheduler, the nightly sweep
 (and any pass in flight, via `halted`), and the pending check-store write,
 which is flushed rather than dropped. Bump the version in `plugin.json` and
 `src/plugin.ts` together.
+
+## The contracts this repo sits between, and how they stay linked
+
+This repo is the middle of a three-repo chain, and every contract in that
+chain is a manually-synced copy (no npm workspace linking anything) --
+each copy's own top comment names its source of truth, so "did this
+change ripple out" is always one file open away rather than something to
+remember:
+
+- **Upstream, from stremio-tv core**: `src/plugin-types.ts`, `src/host.ts`
+  and `src/types.ts` are this plugin's own copies of stremio-tv's
+  `src/plugin-types.ts` (`StremioTvPlugin`/`PluginHost`/`PLUGIN_API_VERSION`)
+  and its scattered `addons.ts`/`client.ts` data shapes. Each file's header
+  says so. stremio-tv is the one repository this one cannot see at build
+  time, so a contract change on that side (a new hook, a new field) has to
+  be *noticed* by hand and copied down -- there is no CI check across
+  repos for this direction.
+- **Downstream, to stremio-tv-scrapers-live-tv**: `src/scraper-types.ts`
+  is the canonical scraper contract (`Scraper`/`ScrapedChannel`/
+  `ScrapedRail`/...). It is copied byte-identical to `docs/scraper-template.ts`
+  in THIS repo (a self-contained file, handable to a session with no
+  access to the rest of this codebase) -- `cp src/scraper-types.ts
+  docs/scraper-template.ts` whenever it changes, same commit. The scrapers
+  repository's own `template/scraper-template.mts` is in turn a richer,
+  example-code-augmented copy of that same `docs/scraper-template.ts`,
+  kept in sync by hand on ITS side (see its `AGENTS.md`) -- so a change to
+  `src/scraper-types.ts` here is not finished until both downstream copies
+  reflect it.
+
+Nothing enforces any of these three links except a person or an agent
+actually checking, each time.
 
 ## Deleting a scraper, and why the default one stays deleted
 

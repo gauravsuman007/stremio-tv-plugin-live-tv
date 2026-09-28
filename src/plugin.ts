@@ -514,7 +514,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.1.2",
+        version: "1.3.0",
         configDir: "",
         dispose() {
             stopScraperScheduler();
