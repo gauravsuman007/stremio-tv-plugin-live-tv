@@ -25,5 +25,6 @@ export const chrome = (client: Client, current: Tab, signedIn: boolean): string 
 export const art = (client: Client, url: string | undefined): string => host.render.art(client, url);
 export const failureNote = (failures: { addon: string; reason: string }[]): string => host.render.failureNote(failures);
 export const KEYS = (): string[] => host.render.KEYS;
-export const vpnBadge = (status: VpnStatus | null): string => host.vpnBadge(status);
-export const vpnSheet = (status: VpnStatus | null, action: string, back: string): string => host.vpnSheet(status, action, back);
+export const vpnBadge = (status: VpnStatus | null, scope?: "live" | "links"): string => host.vpnBadge(status, scope);
+export const vpnSheet = (status: VpnStatus | null, action: string, back: string, scope?: "live" | "links"): string =>
+    host.vpnSheet(status, action, back, scope);

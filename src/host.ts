@@ -99,8 +99,8 @@ export interface PluginHost {
     canCopyLiveAudio(session: unknown, codec: string): boolean;
     undecodableFor(session: unknown): string[];
     requestVpnCapability(pluginId: string, session?: unknown): Promise<VpnCapability>;
-    vpnBadge(status: VpnStatus | null): string;
-    vpnSheet(status: VpnStatus | null, action: string, back: string): string;
+    vpnBadge(status: VpnStatus | null, scope?: "live" | "links"): string;
+    vpnSheet(status: VpnStatus | null, action: string, back: string, scope?: "live" | "links"): string;
     render: {
         escape(value: unknown): string;
         page(options: PageOptions): string;

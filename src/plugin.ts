@@ -54,6 +54,7 @@ import { startScraperScheduler, stopScraperScheduler } from "./scraper-scheduler
 import { lastTaskRun, runScraperTask } from "./scraper-tasks.js";
 import { scheduleSweep, stopSweep, sweep, sweepState } from "./sweep.js";
 
+import { PLUGIN_API_VERSION } from "./plugin-types.js";
 import type { PluginFactory, PluginRoute, PluginRouteContext } from "./plugin-types.js";
 import type { LiveStream, MetaDetail, Sourced, Stream } from "./types.js";
 
@@ -514,7 +515,8 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.3.0",
+        version: "1.3.1",
+        apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
             stopScraperScheduler();
