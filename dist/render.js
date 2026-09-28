@@ -16,5 +16,5 @@ export const chrome = (client, current, signedIn) => host.render.chrome(client, 
 export const art = (client, url) => host.render.art(client, url);
 export const failureNote = (failures) => host.render.failureNote(failures);
 export const KEYS = () => host.render.KEYS;
-export const vpnBadge = (status) => host.vpnBadge(status);
-export const vpnSheet = (status, action, back) => host.vpnSheet(status, action, back);
+export const vpnBadge = (status, scope) => host.vpnBadge(status, scope);
+export const vpnSheet = (status, action, back, scope) => host.vpnSheet(status, action, back, scope);
