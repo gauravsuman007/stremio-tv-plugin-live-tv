@@ -358,18 +358,34 @@ async function fromScraper(
     */
     const byHeading = new Map<string, ScraperRailDecl>();
 
-    for (const scraper of allScrapers()) {
-        if (!scraperEnabled(scraper.id)) continue;
+    /*
+        FETCHED CONCURRENTLY, MERGED SEQUENTIALLY. A `for` loop that awaited
+        each scraper in turn made the whole index build take the SUM of
+        every enabled scraper's build() time -- one slow scraper (a large,
+        cold catalogue) delayed every other scraper's channels landing in
+        the index too, for no reason: nothing about the merge below needs
+        one scraper's result before starting another's request. Only the
+        deterministic "whichever matches first becomes canonical" merge
+        order (see `byKey` above) needs to stay in `allScrapers()`'s order,
+        which `Promise.all` preserves regardless of finishing order.
+    */
+    const enabled = allScrapers().filter((scraper) => scraperEnabled(scraper.id));
+    const results = await Promise.all(
+        enabled.map(async (scraper) => {
+            try {
+                const raw = await withTimeout(scraper.build(), SCRAPER_BUILD_TIMEOUT_MS, `scraper "${scraper.id}"`);
+                return { scraper, raw };
+            } catch (cause) {
+                console.error(`stremio-tv: scraper "${scraper.id}" failed`, cause);
+                recordRun(scraper.id, { at: Date.now(), ok: false, channels: 0, error: String(cause) });
+                return null;
+            }
+        })
+    );
 
-        let raw: ScrapedCatalogue;
-
-        try {
-            raw = await withTimeout(scraper.build(), SCRAPER_BUILD_TIMEOUT_MS, `scraper "${scraper.id}"`);
-        } catch (cause) {
-            console.error(`stremio-tv: scraper "${scraper.id}" failed`, cause);
-            recordRun(scraper.id, { at: Date.now(), ok: false, channels: 0, error: String(cause) });
-            continue;
-        }
+    for (const result of results) {
+        if (!result) continue;
+        const { scraper, raw } = result;
 
         let kept = 0;
         // This scraper's own raw id -> the canonical id it ended up under,
@@ -584,7 +600,22 @@ function better(a: Channel, b: Channel): number {
  * A failed fetch keeps the OLD index rather than emptying the page: a list
  * that is twelve hours out of date is a working Live TV page, and no list
  * is a blank one.
+ *
+ * The very FIRST build (nothing to fall back to yet -- a fresh install, or
+ * right after `forgetChannels()`) is the one case with no old index to
+ * serve, and it can legitimately take minutes: `SCRAPER_BUILD_TIMEOUT_MS`
+ * exists precisely so a large scraper's cold crawl is allowed to run that
+ * long. Awaiting it here directly would mean the first visitor after any
+ * such reset -- or literally anyone else who loads the page while it's in
+ * flight, since `loading` is shared -- hangs their HTTP connection for the
+ * same minutes. `FIRST_BUILD_WAIT_MS` caps how long ANY ONE request waits
+ * for that; `loading` itself is untouched and keeps running in the
+ * background regardless, so the next request (even a few seconds later)
+ * picks up whatever finished, and once `index` is set once this path never
+ * runs again until something explicitly forgets it.
  */
+const FIRST_BUILD_WAIT_MS = 8_000;
+
 export async function channelIndex(): Promise<Index | null> {
     if (index && Date.now() - index.at < INDEX_TTL_MS) return index;
 
@@ -598,7 +629,12 @@ export async function channelIndex(): Promise<Index | null> {
         });
     }
 
-    return index || loading;
+    if (index) return index;
+
+    return Promise.race([
+        loading,
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), FIRST_BUILD_WAIT_MS))
+    ]);
 }
 
 /** Drop the index, so the next page rebuilds it. For the tests. */
