@@ -289,8 +289,20 @@ function normalizeChannelKey(name: string, country: string): string {
     hang this whole rebuild forever, and every page that waits on the
     channel index (chiefly `/tv`) with it. One scraper's bug must not be
     able to spin the Live TV page's loading circle for good.
+
+    This is NOT a budget for how long a legitimate build() may take --
+    a scraper with a large catalogue (ntv.st's ~9k channels, each needing
+    its own resolve round-trip against a flaky third party with its own
+    retries) can genuinely take several minutes on a cold cache, and every
+    well-behaved scraper already bounds its OWN network calls with a much
+    shorter per-request timeout of its own; a truly hung request is caught
+    there, long before this outer one would ever fire. This value only
+    needs to be longer than any real scraper's worst-case cold build, not
+    short -- previously 45s, which was shorter than ntv.st's own cold-crawl
+    time and caused it to "fail" on nearly every rebuild that found the
+    cache cold, wiping out an otherwise-successful crawl still in flight.
 */
-const SCRAPER_BUILD_TIMEOUT_MS = 45_000;
+const SCRAPER_BUILD_TIMEOUT_MS = 15 * 60_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
     return new Promise<T>((resolve, reject) => {
