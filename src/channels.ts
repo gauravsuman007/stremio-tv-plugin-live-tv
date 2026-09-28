@@ -84,6 +84,20 @@ export interface ChannelStream {
     labels: string[];
     referrer: string;
     userAgent: string;
+    /**
+     * The scraper that contributed THIS mirror -- "iptv-org" for the
+     * built-in list, otherwise a `Scraper.id`. Set here, once, when a
+     * scraper's output is merged in (`fromScraper`); never part of the
+     * scraper contract itself (`ScrapedStream` has no such field), because
+     * a scraper does not get to claim credit for someone else's mirror and
+     * should not have to think about attribution at all.
+     *
+     * This is what lets a channel carry mirrors from SEVERAL scrapers at
+     * once (see `matchKey`) while the source list still says, per mirror,
+     * where it actually came from -- and what `rankStreams` reads to give
+     * a non-iptv-org mirror a slight edge, see `SOURCE_RANK`.
+     */
+    source: string;
 }
 
 export interface Channel {
@@ -244,6 +258,30 @@ function ownId(scraperId: string, id: string): boolean {
 }
 
 /*
+    CROSS-SOURCE IDENTITY, FOR THE ONE THING `ownId` DELIBERATELY DOES NOT
+    DO: recognise that "BBC News" from iptv-org and "BBC News HD" from a
+    second scraper are the same channel to a viewer, even though nothing
+    forces the two scrapers to agree on an id.
+
+    Deliberately blunt -- name plus country, both folded hard -- because a
+    false MISS (two entries for one channel) only costs a viewer a second
+    tile, while a false MATCH would silently merge two unrelated channels'
+    mirrors into one entry. Same key shape works for a live event ("Real
+    Madrid vs Barcelona" from two scrapers is the same fixture) as for an
+    ordinary channel; nothing here needs to tell the two apart.
+*/
+function normalizeChannelKey(name: string, country: string): string {
+    const folded = name
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/[̀-ͯ]/g, "")
+        .replace(/\b(hd|fhd|uhd|sd|4k|hevc|backup|feed)\b/g, "")
+        .replace(/[^a-z0-9]+/g, "");
+
+    return `${folded}|${country.toUpperCase()}`;
+}
+
+/*
     A dropped-in or GitHub-imported scraper is somebody else's code, doing
     its own network fetching entirely outside this repo -- if its `build()`
     never resolves (an upstream host that accepts a connection and then says
@@ -271,12 +309,42 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
     });
 }
 
+/** How much a head start a non-iptv-org mirror gets over an iptv-org one
+ *  when nothing else (evidence, codec) has already told them apart -- see
+ *  `rankStreams`. Small on purpose: real evidence of working or not
+ *  working must always outrank a mere hunch about which source is nicer. */
+const SOURCE_RANK: Record<string, number> = { "iptv-org": 0 };
+
+function sourceRank(source: string): number {
+    return SOURCE_RANK[source] ?? 1;
+}
+
 async function fromScraper(
     byId: Map<string, Channel>,
     flagOf: Map<string, string>,
     rails: ScraperRailDecl[]
 ): Promise<number> {
     let added = 0;
+
+    /*
+        THE CROSS-SCRAPER IDENTITY INDEX, shared across every scraper this
+        build() pass touches, in whatever order `allScrapers()` returns
+        them -- neither scraper is "the base" one, whichever contributes a
+        name+country match FIRST becomes the canonical entry and every
+        later match merges its mirrors in under that id. See
+        `normalizeChannelKey`.
+    */
+    const byKey = new Map<string, string>();
+
+    /*
+        RAILS ARE MERGED BY HEADING, so two scrapers that both call their
+        events rail "Live Events" produce one rail with both scrapers'
+        events on it, each event itself already deduplicated by the same
+        name+country matching as an ordinary channel -- an event carried by
+        both scrapers ends up as one card with two mirrors, ranked like any
+        other multi-source channel.
+    */
+    const byHeading = new Map<string, ScraperRailDecl>();
 
     for (const scraper of allScrapers()) {
         if (!scraperEnabled(scraper.id)) continue;
@@ -292,7 +360,11 @@ async function fromScraper(
         }
 
         let kept = 0;
-        const mine = new Set<string>();
+        // This scraper's own raw id -> the canonical id it ended up under,
+        // so its own rails (which speak in its own raw ids) can be
+        // resolved even for a channel that was merged into someone else's
+        // entry rather than added under its own id.
+        const mine = new Map<string, string>();
 
         for (const channel of raw.channels) {
             // A scraper that returns a stray id or an empty channel is a
@@ -312,6 +384,42 @@ async function fromScraper(
                 continue;
             }
 
+            const taggedStreams: ChannelStream[] = channel.streams.map((stream) => ({
+                ...stream,
+                source: scraper.id
+            }));
+
+            const key = normalizeChannelKey(channel.name, channel.country);
+            const existingId = byKey.get(key);
+            const existing = existingId ? byId.get(existingId) : undefined;
+
+            if (existing) {
+                /*
+                    MERGE, DO NOT ADD. The existing entry keeps its own id,
+                    metadata and place in the index -- only its mirror list
+                    grows, deduplicated by URL so re-running against an
+                    already-merged index (or a scraper that lists the same
+                    CDN edge twice) never doubles a mirror up.
+                */
+                const seen = new Set(existing.streams.map((stream) => stream.url));
+                for (const stream of taggedStreams) {
+                    if (seen.has(stream.url)) continue;
+                    seen.add(stream.url);
+                    existing.streams.push(stream);
+                }
+                existing.score = scoreOf(
+                    existing.streams,
+                    existing.categories,
+                    existing.name,
+                    existing.logo,
+                    existing.website,
+                    existing.network
+                );
+                mine.set(channel.id, existing.id);
+                kept += 1;
+                continue;
+            }
+
             const built: Channel = {
                 id: channel.id,
                 name: channel.name,
@@ -322,7 +430,7 @@ async function fromScraper(
                 logo: channel.logo,
                 website: channel.website,
                 network: channel.network,
-                streams: channel.streams,
+                streams: taggedStreams,
                 score: 0
             };
 
@@ -336,7 +444,8 @@ async function fromScraper(
             );
 
             byId.set(built.id, built);
-            mine.add(built.id);
+            byKey.set(key, built.id);
+            mine.set(built.id, built.id);
             if (channel.countryFlag) flagOf.set(built.id, channel.countryFlag);
             kept += 1;
         }
@@ -345,13 +454,14 @@ async function fromScraper(
             A RAIL IS AN OPINION ABOUT THIS SCRAPER'S OWN CHANNELS, NEVER A
             WAY TO REACH INTO SOMEBODY ELSE'S.
 
-            `channelIds` is filtered against `mine` -- the ids this exact
+            `channelIds` is resolved against `mine` -- the ids this exact
             call just contributed, after streams-empty and namespace and
-            duplicate filtering -- not against the final index, which is
-            still being assembled and could still change from a later
-            scraper. An id that did not survive is dropped silently; an id
-            that was never this scraper's is dropped with a log line, the
-            same posture as a stray channel id.
+            duplicate filtering, mapped through to wherever a merge sent
+            them -- not against the final index, which is still being
+            assembled and could still change from a later scraper. An id
+            that did not survive is dropped silently; an id that was never
+            this scraper's is dropped with a log line, the same posture as
+            a stray channel id.
         */
         for (const rail of raw.rails || []) {
             if (!RAIL_SLUG.test(rail.id)) {
@@ -359,28 +469,46 @@ async function fromScraper(
                 continue;
             }
 
-            const channelIds = rail.channelIds.filter((id) => {
-                if (mine.has(id)) return true;
+            const channelIds = rail.channelIds
+                .map((id) => {
+                    const canonical = mine.get(id);
+                    if (canonical) return canonical;
 
-                console.error(
-                    `stremio-tv: scraper "${scraper.id}"'s rail "${rail.id}" named a channel it did not itself return, dropped: ${id}`
-                );
-                return false;
-            });
+                    console.error(
+                        `stremio-tv: scraper "${scraper.id}"'s rail "${rail.id}" named a channel it did not itself return, dropped: ${id}`
+                    );
+                    return null;
+                })
+                .filter((id): id is string => Boolean(id));
 
             if (!channelIds.length) continue;
 
-            rails.push({
-                id: `rail:${scraper.id}-${rail.id}`,
-                heading: rail.heading,
-                by: `From ${scraper.name}`,
-                channelIds
-            });
+            const headingKey = rail.heading.trim().toLowerCase();
+            const already = byHeading.get(headingKey);
+
+            if (already) {
+                const seen = new Set(already.channelIds);
+                for (const id of channelIds) {
+                    if (seen.has(id)) continue;
+                    seen.add(id);
+                    already.channelIds.push(id);
+                }
+                if (!already.by.includes(scraper.name)) already.by += `, ${scraper.name}`;
+            } else {
+                byHeading.set(headingKey, {
+                    id: `rail:${scraper.id}-${rail.id}`,
+                    heading: rail.heading,
+                    by: `From ${scraper.name}`,
+                    channelIds: [...channelIds]
+                });
+            }
         }
 
         added += kept;
         recordRun(scraper.id, { at: Date.now(), ok: true, channels: kept, error: "" });
     }
+
+    rails.push(...byHeading.values());
 
     return added;
 }
@@ -1490,6 +1618,7 @@ export function rankStreams(
     return [...channel.streams].sort(
         (a, b) =>
             evidence(b) - evidence(a) ||
+            sourceRank(b.source) - sourceRank(a.source) ||
             codecRank(b.url, cannot) - codecRank(a.url, cannot) ||
             reputationOf(b.url) - reputationOf(a.url) ||
             a.labels.length - b.labels.length ||
@@ -1600,17 +1729,38 @@ export async function firstWorking(channel: Channel): Promise<ChannelStream | nu
 
 
 /**
- * The "addon" a channel is attributed to.
+ * The "addon" a MIRROR is attributed to -- one per `ChannelStream.source`,
+ * not one for the whole channel, because a merged channel (see
+ * `normalizeChannelKey`) can carry mirrors from several scrapers at once
+ * and the source list is exactly where that has to stop being invisible.
  *
- * It is real in the sense that matters: the source list prints where a
- * stream came from, and "iptv-org" is the honest answer. It is never
- * fetched from -- there is no such service -- so it carries the project's
- * page as its base, which is what anyone following the attribution wants.
+ * It is real in the sense that matters: this prints where a stream
+ * actually came from. It is never fetched from -- there is no such
+ * service -- so it carries a page as its base, which is what anyone
+ * following the attribution wants.
  */
-const SOURCE: Addon = {
-    base: "https://iptv-org.github.io",
-    manifest: { id: "org.iptv.index", name: "iptv-org", types: ["tv"] }
-};
+const SOURCE_ADDON = new Map<string, Addon>();
+
+function addonFor(rawSource: string): Addon {
+    // "" is what an untagged mirror carries -- a fixture built by hand, or
+    // one of the two internal call sites above that only need `verify`'s
+    // answer and never touch the source list. iptv-org is the honest
+    // default for those, exactly as it was before every mirror carried its
+    // own source.
+    const source = rawSource || "iptv-org";
+
+    const cached = SOURCE_ADDON.get(source);
+    if (cached) return cached;
+
+    const name = allScrapers().find((scraper) => scraper.id === source)?.name || source;
+    const addon: Addon =
+        source === "iptv-org"
+            ? { base: "https://iptv-org.github.io", manifest: { id: "org.iptv.index", name: "iptv-org", types: ["tv"] } }
+            : { base: "", manifest: { id: `live.${source}`, name, types: ["tv"] } };
+
+    SOURCE_ADDON.set(source, addon);
+    return addon;
+}
 
 export function channelPreview(channel: Channel): MetaPreview {
     return {
@@ -1702,18 +1852,23 @@ export async function channelStreamList(
     if (routedDown) {
         return {
             items: ranked.map((stream) => ({
-                from: SOURCE,
+                from: addonFor(stream.source),
                 value: {
                     url: stream.url,
                     name: "Live",
-                    title: [stream.quality || "unknown quality", ...stream.labels, hostOf(stream.url)]
+                    title: [
+                        stream.quality || "unknown quality",
+                        ...stream.labels,
+                        addonFor(stream.source).manifest.name,
+                        hostOf(stream.url)
+                    ]
                         .filter(Boolean)
                         .join("\n")
                 } as Stream
             })),
             failures: [
                 {
-                    addon: "iptv-org",
+                    addon: "live-tv",
                     reason:
                         "live TV is set to go through the VPN and the tunnel is not connected, so nothing was checked"
                 }
@@ -1765,7 +1920,7 @@ export async function channelStreamList(
         good.length === 0 && tried > 0
             ? [
                   {
-                      addon: "iptv-org",
+                      addon: "live-tv",
                       reason: blocked
                           ? `all ${tried} sources tried are geo-blocked from here -- this channel needs the VPN, on an exit node in its own country`
                           : tried >= ranked.length
@@ -1777,7 +1932,7 @@ export async function channelStreamList(
 
     return {
         items: ordered.map((stream, at) => ({
-            from: SOURCE,
+            from: addonFor(stream.source),
             value: {
                 url: stream.url,
                 name: at < good.length ? CHECKED : "Live",
@@ -1792,6 +1947,15 @@ export async function channelStreamList(
                     */
                     codecSaid(stream.url, cannot) || stream.quality || "unknown quality",
                     ...stream.labels,
+                    /*
+                        THE SOURCE BADGE. `from` already carries this as
+                        structured data for a client that reads it, but the
+                        Settings > Live TV > channel page renders this list
+                        as a plain title, so it is repeated here in words --
+                        "ntvst" or "iptv-org", not just an addon id nobody
+                        asked for.
+                    */
+                    addonFor(stream.source).manifest.name,
                     hostOf(stream.url)
                 ]
                     .filter(Boolean)
@@ -2221,7 +2385,7 @@ export async function rankReachability(
                       if (!stream?.url) return false;
 
                       return verify(
-                          { url: stream.url, quality: "", labels: [], referrer: "", userAgent: "" },
+                          { url: stream.url, quality: "", labels: [], referrer: "", userAgent: "", source: "" },
                           liveProxyNow as string
                       ).catch(() => false);
                   })
@@ -2239,7 +2403,7 @@ export async function rankReachability(
             if (!stream?.url || codecFor(stream.url) || liveProxyNow === null) return;
 
             await probeCodec(
-                { url: stream.url, quality: "", labels: [], referrer: "", userAgent: "" },
+                { url: stream.url, quality: "", labels: [], referrer: "", userAgent: "", source: "" },
                 liveProxyNow
             ).catch(() => null);
         })
