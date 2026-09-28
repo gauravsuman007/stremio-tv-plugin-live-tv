@@ -7,7 +7,7 @@
  * needing a special case here: every scraper declares its own tasks and
  * its own interval fields, and this module only ever reads them generically.
  */
-import { forgetChannels } from "./channels.js";
+import { expireScraperResult } from "./channels.js";
 import { getScraperConfig } from "./scraper-config.js";
 import { allScrapers } from "./scrapers.js";
 import { lastTaskRun, runScraperTask } from "./scraper-tasks.js";
@@ -39,7 +39,7 @@ async function tick() {
         // tasks came due together -- the next page load picks up whatever
         // just ran.
         if (changed)
-            forgetChannels();
+            expireScraperResult(scraper.id);
     }
 }
 let started = false;

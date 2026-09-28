@@ -14,7 +14,7 @@
 import { setHost } from "./host.js";
 import { initPluginConfig } from "./plugin-config.js";
 import { escape } from "./render.js";
-import { channelIndex, channelMeta, channelStreamList, channelsIn, codecFor, countryNamed, findChannel, forgetChannels, isChannelId, liveRails, loadChecks, rankReachability, runScraperNow, searchChannels, flushChecks } from "./channels.js";
+import { channelIndex, channelMeta, channelStreamList, channelsIn, codecFor, countryNamed, findChannel, forgetChannels, expireScraperResult, stopChannelRefresh, isChannelId, liveRails, loadChecks, rankReachability, runScraperNow, searchChannels, flushChecks } from "./channels.js";
 import { channelSearchPage, countryPage, livePage } from "./pages/tv.js";
 import { arrange, moved, railsPage, visibleRails } from "./pages/rails.js";
 import { forgetGithubSource, importFromGithub, importFromStoredSource, listGithubSources, rememberGithubSource } from "./github-import.js";
@@ -312,7 +312,7 @@ const createPlugin = (host, configDir) => {
                     return html(bareNote("No such source.", "It may have been removed or renamed."), 404);
                 try {
                     await runScraperTask(scraper, taskId, getScraperConfig(scraper));
-                    forgetChannels();
+                    expireScraperResult(scraper.id);
                     return (await sendScraperConfigPage(ctx.client, signedIn, scraperId, { text: "Ran.", ok: true }));
                 }
                 catch (cause) {
@@ -405,11 +405,12 @@ const createPlugin = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.4.4",
+        version: "1.5.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
             stopScraperScheduler();
+            stopChannelRefresh();
             stopSweep();
             flushChecks();
         },

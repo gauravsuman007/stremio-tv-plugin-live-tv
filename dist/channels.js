@@ -50,7 +50,7 @@ import { dirname } from "node:path";
 import { spawn } from "node:child_process";
 import { pluginConfig as config } from "./plugin-config.js";
 import { host } from "./host.js";
-import { allScrapers, beginScraperRun, endScraperRun, recordRun, scraperEnabled, scraperStopRequested } from "./scrapers.js";
+import { allScrapers, beginScraperRun, endScraperRun, lastRun, recordRun, scraperEnabled, scraperStopRequested } from "./scrapers.js";
 const fetchVia = (url, options) => host.fetchVia(url, options);
 /** A rail's local slug, as a scraper may name it -- see `ScrapedRail.id`. */
 const RAIL_SLUG = /^[a-z0-9-]{1,40}$/;
@@ -152,6 +152,13 @@ export function scoreOf(mirrors, categories, name, logo = "", website = "", netw
 }
 let index = null;
 let loading = null;
+/** Bumped whenever the merged index is invalidated, so a merge that was
+ *  already running when a scraper delivered cannot cache its stale result. */
+let generation = 0;
+function invalidate() {
+    generation += 1;
+    index = null;
+}
 /** A scraper's own id, valid on its own terms -- see `LIVE_PREFIX` and the
  *  iptv-org exception to it. */
 function ownId(scraperId, id) {
@@ -200,7 +207,7 @@ function normalizeChannelKey(name, country) {
     time and caused it to "fail" on nearly every rebuild that found the
     cache cold, wiping out an otherwise-successful crawl still in flight.
 */
-const SCRAPER_BUILD_TIMEOUT_MS = 15 * 60_000;
+const SCRAPER_BUILD_TIMEOUT_MS = 60 * 60_000;
 function withTimeout(promise, ms, label) {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
@@ -242,43 +249,18 @@ async function fromScraper(byId, flagOf, rails) {
     */
     const byHeading = new Map();
     /*
-        FETCHED CONCURRENTLY, MERGED SEQUENTIALLY. A `for` loop that awaited
-        each scraper in turn made the whole index build take the SUM of
-        every enabled scraper's build() time -- one slow scraper (a large,
-        cold catalogue) delayed every other scraper's channels landing in
-        the index too, for no reason: nothing about the merge below needs
-        one scraper's result before starting another's request. Only the
-        deterministic "whichever matches first becomes canonical" merge
-        order (see `byKey` above) needs to stay in `allScrapers()`'s order,
-        which `Promise.all` preserves regardless of finishing order.
+        MERGED FROM WHAT EACH SCRAPER LAST DELIVERED, never from a live
+        fetch -- see `refreshScraper`. Merging is pure CPU, so this runs in
+        `allScrapers()`'s order (the deterministic "whichever matches first
+        becomes canonical" rule above) without any scraper's network time
+        being able to delay another's channels.
     */
-    const enabled = allScrapers().filter((scraper) => scraperEnabled(scraper.id));
-    const results = await Promise.all(enabled.map(async (scraper) => {
-        try {
-            const raw = await withTimeout(scraper.build(), SCRAPER_BUILD_TIMEOUT_MS, `scraper "${scraper.id}"`);
-            // A rough count, recorded the moment THIS scraper finishes
-            // rather than waiting on every other one too -- a fast
-            // scraper sitting next to a slow one (a large, cold
-            // catalogue) would otherwise show "not yet run" for as
-            // long as the slow one takes, since the precise post-merge
-            // count below only exists once every scraper's raw result
-            // has been merged in `allScrapers()` order. Merging
-            // overwrites this with the real, deduplicated count once
-            // it gets there.
-            recordRun(scraper.id, {
-                at: Date.now(),
-                ok: true,
-                channels: raw.channels.filter((channel) => channel.streams.length).length,
-                error: ""
-            });
-            return { scraper, raw };
-        }
-        catch (cause) {
-            console.error(`stremio-tv: scraper "${scraper.id}" failed`, cause);
-            recordRun(scraper.id, { at: Date.now(), ok: false, channels: 0, error: String(cause) });
-            return null;
-        }
-    }));
+    const results = allScrapers()
+        .filter((scraper) => scraperEnabled(scraper.id))
+        .map((scraper) => {
+        const held = results_.get(scraper.id);
+        return held ? { scraper, raw: held.catalogue } : null;
+    });
     for (const result of results) {
         if (!result)
             continue;
@@ -403,7 +385,6 @@ async function fromScraper(byId, flagOf, rails) {
             }
         }
         added += kept;
-        recordRun(scraper.id, { at: Date.now(), ok: true, channels: kept, error: "" });
     }
     rails.push(...byHeading.values());
     return added;
@@ -450,63 +431,188 @@ async function build() {
 function better(a, b) {
     return b.score - a.score || a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
 }
+const results_ = new Map();
+const refreshing = new Map();
+const retryAfter = new Map();
+const RETRY_BACKOFF_MS = 10 * 60_000;
+let diskLoaded = false;
+function resultFile(id) {
+    return config.scraperResultsDir && /^[a-z0-9][a-z0-9._-]*$/i.test(id) ? `${config.scraperResultsDir}/${id}.json` : "";
+}
+function saveResult(id, held) {
+    const file = resultFile(id);
+    if (!file)
+        return;
+    try {
+        mkdirSync(dirname(file), { recursive: true });
+        const temporary = `${file}.tmp`;
+        writeFileSync(temporary, JSON.stringify({ v: 1, ...held }), { mode: 0o600 });
+        renameSync(temporary, file);
+    }
+    catch (cause) {
+        console.error(`stremio-tv: could not persist scraper "${id}"'s result`, cause);
+    }
+}
+function loadResults() {
+    if (diskLoaded)
+        return;
+    diskLoaded = true;
+    for (const scraper of allScrapers()) {
+        const file = resultFile(scraper.id);
+        if (!file || results_.has(scraper.id))
+            continue;
+        try {
+            const parsed = JSON.parse(readFileSync(file, "utf8"));
+            // Validated rather than trusted: this file outlives the code
+            // that wrote it, and a malformed one must not break the page.
+            if (parsed.v !== 1 || !parsed.catalogue || !Array.isArray(parsed.catalogue.channels))
+                continue;
+            results_.set(scraper.id, {
+                at: Number(parsed.at) || 0,
+                version: String(parsed.version || ""),
+                catalogue: parsed.catalogue
+            });
+        }
+        catch {
+            // Missing on a first run -- nothing to restore.
+        }
+    }
+}
+let halted = false;
+/** Called from the plugin's `dispose()`. A refresh already in flight is
+ *  left to finish and PERSIST (a long crawl must not be thrown away by an
+ *  update), but no longer touches this orphaned module's index. */
+export function stopChannelRefresh() {
+    halted = true;
+}
+function needsRefresh(scraper) {
+    if (refreshing.has(scraper.id))
+        return false;
+    if ((retryAfter.get(scraper.id) || 0) > Date.now())
+        return false;
+    const held = results_.get(scraper.id);
+    return !held || Date.now() - held.at > INDEX_TTL_MS || held.version !== String(scraper.version || "");
+}
+function refreshScraper(scraper) {
+    const running = refreshing.get(scraper.id);
+    if (running)
+        return running;
+    const started = (async () => {
+        try {
+            const raw = await withTimeout(scraper.build(), SCRAPER_BUILD_TIMEOUT_MS, `scraper "${scraper.id}"`);
+            if (scraperStopRequested(scraper.id))
+                return;
+            const held = { at: Date.now(), version: String(scraper.version || ""), catalogue: raw };
+            saveResult(scraper.id, held);
+            if (halted)
+                return;
+            results_.set(scraper.id, held);
+            retryAfter.delete(scraper.id);
+            recordRun(scraper.id, {
+                at: held.at,
+                ok: true,
+                channels: raw.channels.filter((channel) => channel.streams.length).length,
+                error: ""
+            });
+            invalidate();
+        }
+        catch (cause) {
+            console.error(`stremio-tv: scraper "${scraper.id}" failed`, cause);
+            if (halted || scraperStopRequested(scraper.id))
+                return;
+            retryAfter.set(scraper.id, Date.now() + RETRY_BACKOFF_MS);
+            recordRun(scraper.id, {
+                at: Date.now(),
+                ok: false,
+                channels: 0,
+                error: cause instanceof Error ? cause.message : String(cause)
+            });
+        }
+        finally {
+            refreshing.delete(scraper.id);
+        }
+    })();
+    refreshing.set(scraper.id, started);
+    return started;
+}
+function refreshStale() {
+    for (const scraper of allScrapers()) {
+        if (scraperEnabled(scraper.id) && needsRefresh(scraper))
+            void refreshScraper(scraper);
+    }
+}
 /**
- * The index, fetched if it is missing or stale.
+ * The index, merged from every enabled scraper's held result.
  *
- * A failed fetch keeps the OLD index rather than emptying the page: a list
- * that is twelve hours out of date is a working Live TV page, and no list
- * is a blank one.
- *
- * The very FIRST build (nothing to fall back to yet -- a fresh install, or
- * right after `forgetChannels()`) is the one case with no old index to
- * serve, and it can legitimately take minutes: `SCRAPER_BUILD_TIMEOUT_MS`
- * exists precisely so a large scraper's cold crawl is allowed to run that
- * long. Awaiting it here directly would mean the first visitor after any
- * such reset -- or literally anyone else who loads the page while it's in
- * flight, since `loading` is shared -- hangs their HTTP connection for the
- * same minutes. `FIRST_BUILD_WAIT_MS` caps how long ANY ONE request waits
- * for that; `loading` itself is untouched and keeps running in the
- * background regardless, so the next request (even a few seconds later)
- * picks up whatever finished, and once `index` is set once this path never
- * runs again until something explicitly forgets it.
+ * With any result held (restored from disk, or delivered) this never waits
+ * on the network: it merges what exists and refreshes the stale in the
+ * background, each completion invalidating the merged index so the next
+ * request folds it in. Only with NOTHING held (a first install) does a
+ * request wait at all, and then for at most `FIRST_BUILD_WAIT_MS`, so the
+ * page reports "no channels yet" instead of hanging.
  */
 const FIRST_BUILD_WAIT_MS = 8_000;
 export async function channelIndex() {
-    if (index && Date.now() - index.at < INDEX_TTL_MS)
+    if (index) {
+        refreshStale();
         return index;
-    if (!loading) {
-        loading = build().then((built) => {
-            if (built)
-                index = built;
-            loading = null;
-            return index;
-        });
+    }
+    loadResults();
+    refreshStale();
+    const usable = allScrapers().some((scraper) => scraperEnabled(scraper.id) && results_.has(scraper.id));
+    if (!usable && refreshing.size) {
+        await Promise.race([
+            Promise.all([...refreshing.values()]),
+            new Promise((resolve) => setTimeout(resolve, FIRST_BUILD_WAIT_MS).unref())
+        ]);
     }
     if (index)
         return index;
-    return Promise.race([
-        loading,
-        new Promise((resolve) => setTimeout(() => resolve(null), FIRST_BUILD_WAIT_MS))
-    ]);
+    if (!loading) {
+        const started = generation;
+        loading = build().then((built) => {
+            loading = null;
+            if (built && !halted && started === generation)
+                index = built;
+            return built;
+        });
+    }
+    return loading;
 }
-/** Drop the index, so the next page rebuilds it. For the tests. */
+/** Drop the merged index, so the next page re-merges the held results
+ *  (no network). */
 export function forgetChannels() {
-    index = null;
+    invalidate();
+}
+/** Drop every held result too, in memory only. For the tests. */
+export function resetChannelResultsForTest() {
+    invalidate();
+    loading = null;
+    results_.clear();
+    refreshing.clear();
+    retryAfter.clear();
+    diskLoaded = false;
+    halted = false;
+}
+/** Mark one scraper's held result stale so its next refresh really
+ *  re-runs `build()` -- for when its own task just changed what it
+ *  would return. */
+export function expireScraperResult(id) {
+    const held = results_.get(id);
+    if (held)
+        held.at = 0;
+    retryAfter.delete(id);
+    invalidate();
 }
 /**
- * One scraper's `build()`, run by hand from Settings' "Run now" -- outside
- * the shared index rebuild `fromScraper` normally drives. Records the same
- * `ScraperRun` that pass would have, for that one scraper, then drops the
- * cached index so the next page load folds a fresh answer in through the
- * ordinary shared pass (which runs every enabled scraper together, for the
- * cross-scraper merge) -- this call never merges into `index` itself.
+ * One scraper's `build()`, run by hand from Settings' "Run now". Shares
+ * `refreshScraper` with the background refresh, so a manual run and a
+ * background one can never crawl the same source twice at once.
  *
  * STOPPING IT IS HONEST, NOT REAL CANCELLATION. `Scraper.build()` takes no
- * abort signal (see `scraper-types.ts`) -- a scraper is one opaque promise,
- * not a loop this host can check into partway through, unlike the nightly
- * sweep's own `halted`. "Stop" only marks the run as no longer wanted: its
- * result is discarded and the button disappears, but a fetch already in
- * flight still runs to completion on the wire.
+ * abort signal (see `scraper-types.ts`) -- "Stop" only marks the run as no
+ * longer wanted: its result is discarded and the button disappears, but a
+ * fetch already in flight still runs to completion on the wire.
  */
 export async function runScraperNow(id) {
     const scraper = allScrapers().find((s) => s.id === id);
@@ -515,19 +621,12 @@ export async function runScraperNow(id) {
     if (!beginScraperRun(id))
         return { ok: false, error: "Already running." };
     try {
-        const raw = await withTimeout(scraper.build(), SCRAPER_BUILD_TIMEOUT_MS, `scraper "${id}"`);
+        retryAfter.delete(id);
+        await refreshScraper(scraper);
         if (scraperStopRequested(id))
             return { ok: false, error: "Stopped." };
-        const channels = raw.channels.filter((channel) => channel.streams.length).length;
-        recordRun(id, { at: Date.now(), ok: true, channels, error: "" });
-        forgetChannels();
-        return { ok: true, error: "" };
-    }
-    catch (cause) {
-        const message = cause instanceof Error ? cause.message : String(cause);
-        if (!scraperStopRequested(id))
-            recordRun(id, { at: Date.now(), ok: false, channels: 0, error: message });
-        return { ok: false, error: message };
+        const run = lastRun(id);
+        return run && !run.ok ? { ok: false, error: run.error } : { ok: true, error: "" };
     }
     finally {
         endScraperRun(id);
