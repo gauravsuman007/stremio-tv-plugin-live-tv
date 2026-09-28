@@ -8,7 +8,7 @@
  * its own interval fields, and this module only ever reads them generically.
  */
 
-import { forgetChannels } from "./channels.js";
+import { expireScraperResult } from "./channels.js";
 import { getScraperConfig } from "./scraper-config.js";
 import { allScrapers } from "./scrapers.js";
 import { lastTaskRun, runScraperTask } from "./scraper-tasks.js";
@@ -44,7 +44,7 @@ async function tick(): Promise<void> {
         // One rebuild per scraper per tick is enough even if several of its
         // tasks came due together -- the next page load picks up whatever
         // just ran.
-        if (changed) forgetChannels();
+        if (changed) expireScraperResult(scraper.id);
     }
 }
 

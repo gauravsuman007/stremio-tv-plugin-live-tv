@@ -25,6 +25,8 @@ import {
     describeChannel,
     findChannel,
     forgetChannels,
+    expireScraperResult,
+    stopChannelRefresh,
     isChannelId,
     liveRails,
     loadChecks,
@@ -430,7 +432,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
 
                 try {
                     await runScraperTask(scraper, taskId, getScraperConfig(scraper));
-                    forgetChannels();
+                    expireScraperResult(scraper.id);
 
                     return (await sendScraperConfigPage(ctx.client, signedIn, scraperId, { text: "Ran.", ok: true })) as ReturnType<typeof html>;
                 } catch (cause) {
@@ -556,11 +558,12 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.4.4",
+        version: "1.5.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
             stopScraperScheduler();
+            stopChannelRefresh();
             stopSweep();
             flushChecks();
         },

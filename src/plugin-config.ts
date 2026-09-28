@@ -27,6 +27,9 @@ export const pluginConfig = {
     get githubSourcesStore(): string {
         return base ? `${base}/github-sources.json` : "";
     },
+    get scraperResultsDir(): string {
+        return base ? `${base}/scraper-results` : "";
+    },
     get liveChecks(): string {
         return base ? `${base}/live-checks.json` : "";
     },
