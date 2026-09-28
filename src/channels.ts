@@ -374,6 +374,23 @@ async function fromScraper(
         enabled.map(async (scraper) => {
             try {
                 const raw = await withTimeout(scraper.build(), SCRAPER_BUILD_TIMEOUT_MS, `scraper "${scraper.id}"`);
+
+                // A rough count, recorded the moment THIS scraper finishes
+                // rather than waiting on every other one too -- a fast
+                // scraper sitting next to a slow one (a large, cold
+                // catalogue) would otherwise show "not yet run" for as
+                // long as the slow one takes, since the precise post-merge
+                // count below only exists once every scraper's raw result
+                // has been merged in `allScrapers()` order. Merging
+                // overwrites this with the real, deduplicated count once
+                // it gets there.
+                recordRun(scraper.id, {
+                    at: Date.now(),
+                    ok: true,
+                    channels: raw.channels.filter((channel) => channel.streams.length).length,
+                    error: ""
+                });
+
                 return { scraper, raw };
             } catch (cause) {
                 console.error(`stremio-tv: scraper "${scraper.id}" failed`, cause);
