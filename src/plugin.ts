@@ -30,6 +30,7 @@ import {
     loadChecks,
     provenFor,
     rankReachability,
+    runScraperNow,
     searchChannels,
     warmChannel,
     flushChecks,
@@ -47,7 +48,17 @@ import {
     type GithubSource
 } from "./github-import.js";
 import { importSummary as describeImport, scraperConfigPage, scrapersPage, type GithubSourceRow, type ScraperRow } from "./pages/scrapers.js";
-import { allScrapers, builtinScraperIds, deleteScraper, lastRun, loadDynamicScrapers, scraperEnabled, setScraperEnabled } from "./scrapers.js";
+import {
+    allScrapers,
+    builtinScraperIds,
+    deleteScraper,
+    lastRun,
+    loadDynamicScrapers,
+    requestScraperStop,
+    scraperEnabled,
+    scraperRunning,
+    setScraperEnabled
+} from "./scrapers.js";
 import { seedOrUpdateDefaultScraper } from "./default-scraper.js";
 import { getScraperConfig, setScraperConfig } from "./scraper-config.js";
 import { startScraperScheduler, stopScraperScheduler } from "./scraper-scheduler.js";
@@ -142,6 +153,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
             enabled: scraperEnabled(scraper.id),
             removable: !builtinScraperIds().includes(scraper.id),
             run: lastRun(scraper.id),
+            running: scraperRunning(scraper.id),
             version: scraper.version,
             configurable: Boolean(scraper.configSchema?.length || scraper.tasks?.length)
         }));
@@ -431,6 +443,35 @@ const createPlugin: PluginFactory = (host, configDir) => {
         },
         {
             method: "POST",
+            path: "/tv/scrapers/:id/run",
+            async handle(ctx) {
+                const scraperId = ctx.params.id as string;
+
+                if (!allScrapers().some((s) => s.id === scraperId)) {
+                    return html(bareNote("No such source.", "It may have been removed or renamed."), 404);
+                }
+
+                // Fire and forget, same as the nightly sweep's own manual
+                // trigger below -- the page polls its "running" state on
+                // reload rather than waiting on this request.
+                void runScraperNow(scraperId).catch((cause) =>
+                    console.error(`live-tv: manual run of "${scraperId}" failed`, cause)
+                );
+
+                return redirect(ctx.client, "/tv/scrapers");
+            }
+        },
+        {
+            method: "POST",
+            path: "/tv/scrapers/:id/stop",
+            async handle(ctx) {
+                requestScraperStop(ctx.params.id as string);
+
+                return redirect(ctx.client, "/tv/scrapers");
+            }
+        },
+        {
+            method: "POST",
             path: "/tv/sweep",
             async handle(ctx) {
                 void sweep().catch((cause) => console.error("live-tv: sweep failed", cause));
@@ -515,7 +556,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.3.1",
+        version: "1.4.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {

@@ -52,7 +52,7 @@ import { spawn } from "node:child_process";
 
 import { pluginConfig as config } from "./plugin-config.js";
 import { host } from "./host.js";
-import { allScrapers, recordRun, scraperEnabled } from "./scrapers.js";
+import { allScrapers, beginScraperRun, endScraperRun, recordRun, scraperEnabled, scraperStopRequested } from "./scrapers.js";
 import type { ScrapedCatalogue } from "./scraper-types.js";
 import type { Addon, AddonFailure, MetaDetail, MetaPreview, Sourced, Stream } from "./types.js";
 
@@ -592,6 +592,49 @@ export async function channelIndex(): Promise<Index | null> {
 /** Drop the index, so the next page rebuilds it. For the tests. */
 export function forgetChannels(): void {
     index = null;
+}
+
+/**
+ * One scraper's `build()`, run by hand from Settings' "Run now" -- outside
+ * the shared index rebuild `fromScraper` normally drives. Records the same
+ * `ScraperRun` that pass would have, for that one scraper, then drops the
+ * cached index so the next page load folds a fresh answer in through the
+ * ordinary shared pass (which runs every enabled scraper together, for the
+ * cross-scraper merge) -- this call never merges into `index` itself.
+ *
+ * STOPPING IT IS HONEST, NOT REAL CANCELLATION. `Scraper.build()` takes no
+ * abort signal (see `scraper-types.ts`) -- a scraper is one opaque promise,
+ * not a loop this host can check into partway through, unlike the nightly
+ * sweep's own `halted`. "Stop" only marks the run as no longer wanted: its
+ * result is discarded and the button disappears, but a fetch already in
+ * flight still runs to completion on the wire.
+ */
+export async function runScraperNow(id: string): Promise<{ ok: boolean; error: string }> {
+    const scraper = allScrapers().find((s) => s.id === id);
+
+    if (!scraper) return { ok: false, error: "No such source." };
+    if (!beginScraperRun(id)) return { ok: false, error: "Already running." };
+
+    try {
+        const raw = await withTimeout(scraper.build(), SCRAPER_BUILD_TIMEOUT_MS, `scraper "${id}"`);
+
+        if (scraperStopRequested(id)) return { ok: false, error: "Stopped." };
+
+        const channels = raw.channels.filter((channel) => channel.streams.length).length;
+
+        recordRun(id, { at: Date.now(), ok: true, channels, error: "" });
+        forgetChannels();
+
+        return { ok: true, error: "" };
+    } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+
+        if (!scraperStopRequested(id)) recordRun(id, { at: Date.now(), ok: false, channels: 0, error: message });
+
+        return { ok: false, error: message };
+    } finally {
+        endScraperRun(id);
+    }
 }
 
 export function isChannelId(id: string): boolean {

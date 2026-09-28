@@ -31,6 +31,9 @@ export interface ScraperRow {
     /** False for an image-built scraper, which has no file to delete. */
     removable: boolean;
     run: ScraperRun | null;
+    /** True while a manual "Run now" is in flight for this scraper -- shows
+     *  a "Stop" button in place of "Run now". */
+    running: boolean;
     /** Shown beside the id when set -- see `Scraper.version`. */
     version?: string;
     /** True when this scraper declares a `configSchema` or `tasks` -- shows
@@ -86,15 +89,21 @@ export function scrapersPage(
 ): string {
     const list = rows
         .map((row) => {
-            const status = !row.run
-                ? "not yet run"
-                : row.run.ok
-                  ? `${row.run.channels} channel${row.run.channels === 1 ? "" : "s"}, ${since(row.run.at)}`
-                  : `failed ${since(row.run.at)}: ${row.run.error}`;
+            const status = row.running
+                ? "running…"
+                : !row.run
+                  ? "not yet run"
+                  : row.run.ok
+                    ? `${row.run.channels} channel${row.run.channels === 1 ? "" : "s"}, ${since(row.run.at)}`
+                    : `failed ${since(row.run.at)}: ${row.run.error}`;
 
             const toggle = `<a class="step" href="${escape(
                 `${client.link("/tv/scrapers")}?${row.enabled ? "off" : "on"}=${encodeURIComponent(row.id)}`
             )}">${row.enabled ? "Disable" : "Enable"}</a>`;
+
+            const runToggle = row.running
+                ? `<form method="POST" action="${escape(client.link(`/tv/scrapers/${encodeURIComponent(row.id)}/stop`))}" style="display:inline"><button class="step" type="submit">Stop</button></form>`
+                : `<form method="POST" action="${escape(client.link(`/tv/scrapers/${encodeURIComponent(row.id)}/run`))}" style="display:inline"><button class="step" type="submit">Run now</button></form>`;
 
             // A dialog needs a script and a page may carry only one, so the
             // confirmation is the browser's own, attached inline.
@@ -109,7 +118,7 @@ export function scrapersPage(
             return `<li class="railrow${row.enabled ? "" : " railoff"}">
 <span class="railname">${escape(row.name)}${row.version ? ` <span class="railsay">v${escape(row.version)}</span>` : ""}</span>
 <span class="railsay">${escape(status)}</span>
-<span class="railacts">${gear}${toggle}${remove}</span>
+<span class="railacts">${gear}${runToggle}${toggle}${remove}</span>
 </li>`;
         })
         .join("\n");
