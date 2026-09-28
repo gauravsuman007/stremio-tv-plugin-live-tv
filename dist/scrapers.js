@@ -73,11 +73,30 @@ export function looksLikeScraper(value) {
  * claims an id already in use is skipped with a logged reason rather than
  * aborting the others.
  */
+/*
+    THIS MUST BE UNIQUE ACROSS THE WHOLE PROCESS, NOT JUST THIS MODULE
+    INSTANCE. stremio-tv reloads this plugin from a freshly imported copy
+    on every update (see `dispose()`'s own note on this) -- a fresh copy
+    means `reloadCounter` below starts back at 0 every time, but Node's own
+    ES module cache is keyed by the resolved URL and lives for the whole
+    process, not per plugin instance. A later boot's FIRST reload can reuse
+    the exact `?reload=1` a PREVIOUS boot's first reload already used --
+    same URL, so `import()` hands back that old, cached module instead of
+    re-reading the file, even though the file on disk has since changed.
+    Seeding the counter from this module's own load time (necessarily
+    different across two separate plugin instances, since loading this
+    file fresh is what a plugin reload IS) makes every reload's cache key
+    unique for real, not just within one instance's own lifetime -- this
+    was previously mis-diagnosed as some other kind of staleness, only
+    "fixed" by restarting the whole container to clear Node's module cache
+    outright.
+*/
+const bootEpoch = Date.now();
 let reloadCounter = 0;
 export async function loadDynamicScrapers() {
     const found = [];
     const foundFiles = new Map();
-    const cacheBust = ++reloadCounter;
+    const cacheBust = `${bootEpoch}-${++reloadCounter}`;
     if (config.scrapersDir) {
         let files = [];
         try {

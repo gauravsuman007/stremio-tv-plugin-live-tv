@@ -405,7 +405,7 @@ const createPlugin = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.4.2",
+        version: "1.4.3",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
