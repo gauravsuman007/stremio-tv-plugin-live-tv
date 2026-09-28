@@ -14,12 +14,12 @@
 import { setHost } from "./host.js";
 import { initPluginConfig } from "./plugin-config.js";
 import { escape } from "./render.js";
-import { channelIndex, channelMeta, channelStreamList, channelsIn, codecFor, countryNamed, findChannel, forgetChannels, isChannelId, liveRails, loadChecks, rankReachability, searchChannels, flushChecks } from "./channels.js";
+import { channelIndex, channelMeta, channelStreamList, channelsIn, codecFor, countryNamed, findChannel, forgetChannels, isChannelId, liveRails, loadChecks, rankReachability, runScraperNow, searchChannels, flushChecks } from "./channels.js";
 import { channelSearchPage, countryPage, livePage } from "./pages/tv.js";
 import { arrange, moved, railsPage, visibleRails } from "./pages/rails.js";
 import { forgetGithubSource, importFromGithub, importFromStoredSource, listGithubSources, rememberGithubSource } from "./github-import.js";
 import { importSummary as describeImport, scraperConfigPage, scrapersPage } from "./pages/scrapers.js";
-import { allScrapers, builtinScraperIds, deleteScraper, lastRun, loadDynamicScrapers, scraperEnabled, setScraperEnabled } from "./scrapers.js";
+import { allScrapers, builtinScraperIds, deleteScraper, lastRun, loadDynamicScrapers, requestScraperStop, scraperEnabled, scraperRunning, setScraperEnabled } from "./scrapers.js";
 import { seedOrUpdateDefaultScraper } from "./default-scraper.js";
 import { getScraperConfig, setScraperConfig } from "./scraper-config.js";
 import { startScraperScheduler, stopScraperScheduler } from "./scraper-scheduler.js";
@@ -97,6 +97,7 @@ const createPlugin = (host, configDir) => {
             enabled: scraperEnabled(scraper.id),
             removable: !builtinScraperIds().includes(scraper.id),
             run: lastRun(scraper.id),
+            running: scraperRunning(scraper.id),
             version: scraper.version,
             configurable: Boolean(scraper.configSchema?.length || scraper.tasks?.length)
         }));
@@ -324,6 +325,29 @@ const createPlugin = (host, configDir) => {
         },
         {
             method: "POST",
+            path: "/tv/scrapers/:id/run",
+            async handle(ctx) {
+                const scraperId = ctx.params.id;
+                if (!allScrapers().some((s) => s.id === scraperId)) {
+                    return html(bareNote("No such source.", "It may have been removed or renamed."), 404);
+                }
+                // Fire and forget, same as the nightly sweep's own manual
+                // trigger below -- the page polls its "running" state on
+                // reload rather than waiting on this request.
+                void runScraperNow(scraperId).catch((cause) => console.error(`live-tv: manual run of "${scraperId}" failed`, cause));
+                return redirect(ctx.client, "/tv/scrapers");
+            }
+        },
+        {
+            method: "POST",
+            path: "/tv/scrapers/:id/stop",
+            async handle(ctx) {
+                requestScraperStop(ctx.params.id);
+                return redirect(ctx.client, "/tv/scrapers");
+            }
+        },
+        {
+            method: "POST",
             path: "/tv/sweep",
             async handle(ctx) {
                 void sweep().catch((cause) => console.error("live-tv: sweep failed", cause));
@@ -381,7 +405,7 @@ const createPlugin = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.3.1",
+        version: "1.4.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {

@@ -43,12 +43,17 @@ export function importSummary(result) {
 export function scrapersPage(client, signedIn, rows, githubSources = [], importNote = null, vpn = null) {
     const list = rows
         .map((row) => {
-        const status = !row.run
-            ? "not yet run"
-            : row.run.ok
-                ? `${row.run.channels} channel${row.run.channels === 1 ? "" : "s"}, ${since(row.run.at)}`
-                : `failed ${since(row.run.at)}: ${row.run.error}`;
+        const status = row.running
+            ? "running…"
+            : !row.run
+                ? "not yet run"
+                : row.run.ok
+                    ? `${row.run.channels} channel${row.run.channels === 1 ? "" : "s"}, ${since(row.run.at)}`
+                    : `failed ${since(row.run.at)}: ${row.run.error}`;
         const toggle = `<a class="step" href="${escape(`${client.link("/tv/scrapers")}?${row.enabled ? "off" : "on"}=${encodeURIComponent(row.id)}`)}">${row.enabled ? "Disable" : "Enable"}</a>`;
+        const runToggle = row.running
+            ? `<form method="POST" action="${escape(client.link(`/tv/scrapers/${encodeURIComponent(row.id)}/stop`))}" style="display:inline"><button class="step" type="submit">Stop</button></form>`
+            : `<form method="POST" action="${escape(client.link(`/tv/scrapers/${encodeURIComponent(row.id)}/run`))}" style="display:inline"><button class="step" type="submit">Run now</button></form>`;
         // A dialog needs a script and a page may carry only one, so the
         // confirmation is the browser's own, attached inline.
         const remove = row.removable
@@ -60,7 +65,7 @@ export function scrapersPage(client, signedIn, rows, githubSources = [], importN
         return `<li class="railrow${row.enabled ? "" : " railoff"}">
 <span class="railname">${escape(row.name)}${row.version ? ` <span class="railsay">v${escape(row.version)}</span>` : ""}</span>
 <span class="railsay">${escape(status)}</span>
-<span class="railacts">${gear}${toggle}${remove}</span>
+<span class="railacts">${gear}${runToggle}${toggle}${remove}</span>
 </li>`;
     })
         .join("\n");

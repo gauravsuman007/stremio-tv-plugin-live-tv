@@ -203,3 +203,34 @@ export function recordRun(id, run) {
 export function lastRun(id) {
     return runs.get(id) || null;
 }
+/**
+ * Whether a manual "Run now" (Settings > Live TV > Sources) is currently in
+ * flight for a scraper, and the cooperative stop flag its "Stop" button
+ * sets. In-memory only, same as `runs` above -- a reloaded plugin gets a
+ * fresh, empty map, which is fine: an orphaned run belongs to the old
+ * module instance and this one has nothing to show for it either way.
+ */
+const running = new Map();
+export function scraperRunning(id) {
+    return running.has(id);
+}
+/** Claims the run slot for `id`, or refuses if one is already in flight. */
+export function beginScraperRun(id) {
+    if (running.has(id))
+        return false;
+    running.set(id, { stopRequested: false });
+    return true;
+}
+export function endScraperRun(id) {
+    running.delete(id);
+}
+export function requestScraperStop(id) {
+    const state = running.get(id);
+    if (!state)
+        return false;
+    state.stopRequested = true;
+    return true;
+}
+export function scraperStopRequested(id) {
+    return running.get(id)?.stopRequested ?? false;
+}
