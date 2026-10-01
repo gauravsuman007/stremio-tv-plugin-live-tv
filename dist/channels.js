@@ -50,6 +50,8 @@ import { dirname } from "node:path";
 import { spawn } from "node:child_process";
 import { pluginConfig as config } from "./plugin-config.js";
 import { host } from "./host.js";
+import { relayAvailable } from "./relay-support.js";
+import { languageLabel, languagesOf } from "./taxonomy.js";
 import { allScrapers, beginScraperRun, endScraperRun, lastRun, recordRun, scraperEnabled, scraperStopRequested } from "./scrapers.js";
 const fetchVia = (url, options) => host.fetchVia(url, options);
 /** A rail's local slug, as a scraper may name it -- see `ScrapedRail.id`. */
@@ -285,7 +287,18 @@ async function fromScraper(byId, flagOf, rails) {
                 console.error(`stremio-tv: duplicate live channel id, kept the first: ${channel.id}`);
                 continue;
             }
-            const taggedStreams = channel.streams.map((stream) => ({
+            /*
+                A MIRROR THAT NEEDS A DECODER IS KEPT ONLY WHEN IT CAN PLAY:
+                the scraper must actually export that decoder, and the
+                running stremio-tv must be new enough to let `relay.ts`
+                apply it (plugin API 1.2.0). Otherwise it would sit in the
+                list looking like any other mirror and hand the player a
+                picture instead of video.
+            */
+            const playable = channel.streams.filter((stream) => !stream.decoder || (relayAvailable() && typeof scraper.decoders?.[stream.decoder] === "function"));
+            if (!playable.length)
+                continue;
+            const taggedStreams = playable.map((stream) => ({
                 ...stream,
                 source: scraper.id
             }));
@@ -1216,10 +1229,20 @@ export async function probeCodec(stream, proxy = "") {
         const segment = urisIn(list.text, list.url).segments[0];
         if (!segment)
             return null;
-        const got = await taste(segment, stream, proxy, PROBE_BYTES, true);
+        /*
+            A DISGUISED SEGMENT is read whole and decoded first -- the
+            first 192KB of a PNG says nothing about the video inside it,
+            and an unknown codec is what sends a channel to a full
+            re-encode at play time.
+        */
+        const decode = stream.decoder
+            ? allScrapers().find((entry) => entry.id === stream.source)?.decoders?.[stream.decoder]
+            : undefined;
+        const got = await taste(segment, stream, proxy, decode ? 64 * 1024 * 1024 : PROBE_BYTES, true);
         if (got.status >= 400 || got.bytes < 32 * 1024)
             return null;
-        const fact = await askFfprobe(got.data);
+        const data = decode ? Buffer.from(await decode(new Uint8Array(got.data), segment)).subarray(0, PROBE_BYTES) : got.data;
+        const fact = await askFfprobe(data);
         /*
             A probe that found nothing is not written down. ffprobe failing
             on a truncated read is a fact about the read, and recording it
@@ -1805,7 +1828,7 @@ export function select(built, want, home = []) {
             return false;
         if (categories.length && !categories.some((c) => channel.categories.includes(c)))
             return false;
-        if (languages.length && !languages.some((l) => channel.languages.includes(l)))
+        if (languages.length && !languages.some((l) => languagesOf(channel).includes(l)))
             return false;
         return true;
     });
@@ -1908,6 +1931,14 @@ export async function channelsIn(code) {
     */
     return [...(built?.byCountry.get(code.toUpperCase()) || [])].sort((a, b) => proofOf(b) - proofOf(a) || better(a, b));
 }
+/**
+ * Every channel, for the Browse page's "All countries" -- ordered the way
+ * a country page is (what the night proved first), for the same reason.
+ */
+export async function allChannelsRanked() {
+    const built = await channelIndex();
+    return [...(built?.all || [])].sort((a, b) => proofOf(b) - proofOf(a) || better(a, b));
+}
 /** Every country that has channels, most first. */
 export async function countries() {
     return (await channelIndex())?.countries || [];
@@ -1961,6 +1992,39 @@ export async function liveRails(home, languages, countryHref) {
             channels,
             more: countryHref(code)
         });
+    }
+    /*
+        A RAIL PER LANGUAGE, for the household's first market when it
+        speaks more than one -- which for India is the whole story: the
+        country rail above is Hindi and English by sheer weight of
+        numbers, and a Tamil or Bengali household would otherwise have to
+        go looking for every channel it actually watches. The market's own
+        biggest language is skipped (the country rail already is that
+        rail), and only languages with a real rail's worth of channels get
+        one, at most six.
+    */
+    const first = home[0];
+    if (first) {
+        const local = built.byCountry.get(first) || [];
+        const counts = new Map();
+        for (const channel of local) {
+            for (const code of languagesOf(channel))
+                counts.set(code, (counts.get(code) || 0) + 1);
+        }
+        const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+        for (const [code, count] of ranked.slice(1, 7)) {
+            if (count < MIN_RAIL)
+                continue;
+            const channels = select(built, { countries: [first], languages: [code], limit: RAIL });
+            const name = languageLabel(code, (raw) => languages.find((entry) => entry.code === raw)?.name || "");
+            rails.push({
+                id: `lang:${first}:${code}`,
+                heading: `${name} channels`,
+                by: `In ${named.get(first) || first}`,
+                channels,
+                more: `${countryHref(first)}?l=${encodeURIComponent(code)}`
+            });
+        }
     }
     const themed = [
         { id: "sports", heading: "Sports", categories: ["sports"] },

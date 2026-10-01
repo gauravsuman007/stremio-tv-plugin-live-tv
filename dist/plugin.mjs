@@ -14,8 +14,9 @@
 import { setHost } from "./host.js";
 import { initPluginConfig } from "./plugin-config.js";
 import { escape } from "./render.js";
-import { channelIndex, channelMeta, channelStreamList, channelsIn, codecFor, countryNamed, findChannel, forgetChannels, expireScraperResult, stopChannelRefresh, isChannelId, liveRails, loadChecks, rankReachability, runScraperNow, searchChannels, flushChecks } from "./channels.js";
-import { channelSearchPage, countryPage, livePage } from "./pages/tv.js";
+import { channelIndex, channelMeta, channelStreamList, allChannelsRanked, channelsIn, codecFor, countries, countryNamed, findChannel, forgetChannels, expireScraperResult, stopChannelRefresh, isChannelId, liveRails, loadChecks, rankReachability, runScraperNow, searchChannels, flushChecks } from "./channels.js";
+import { channelSearchPage, livePage } from "./pages/tv.js";
+import { browsePage, worldPage } from "./pages/browse.js";
 import { arrange, moved, railsPage, visibleRails } from "./pages/rails.js";
 import { forgetGithubSource, importFromGithub, importFromStoredSource, listGithubSources, rememberGithubSource } from "./github-import.js";
 import { importSummary as describeImport, scraperConfigPage, scrapersPage } from "./pages/scrapers.js";
@@ -25,6 +26,7 @@ import { getScraperConfig, setScraperConfig } from "./scraper-config.js";
 import { startScraperScheduler, stopScraperScheduler } from "./scraper-scheduler.js";
 import { lastTaskRun, runScraperTask } from "./scraper-tasks.js";
 import { scheduleSweep, stopSweep, sweep, sweepState } from "./sweep.js";
+import { liveFetch, registerStream } from "./relay.js";
 import { PLUGIN_API_VERSION } from "./plugin-types.js";
 const COUNTRY_PAGE = 60;
 function html(body, status = 200) {
@@ -376,6 +378,11 @@ const createPlugin = (host, configDir) => {
             }
         },
         {
+            /*
+                One country, as a Browse page with the region fixed: genres
+                down the side, languages along the top where there is a
+                choice. See `pages/browse.ts`.
+            */
             method: "GET",
             path: "/tv/country/:code",
             async handle(ctx) {
@@ -385,7 +392,65 @@ const createPlugin = (host, configDir) => {
                 if (!country)
                     return redirect(ctx.client, "/tv");
                 const capability = await host.requestVpnCapability("live-tv", ctx.client.session);
-                return html(countryPage(ctx.client, signedIn, country, await channelsIn(code), capability.status, Math.max(0, Math.floor(Number(ctx.query.get("skip")) || 0)), COUNTRY_PAGE));
+                return html(browsePage(ctx.client, signedIn, {
+                    scope: { country: code, title: country.name, flag: country.flag, path: `/tv/country/${encodeURIComponent(code)}`, regionChips: false },
+                    regions: [],
+                    channels: await channelsIn(code),
+                    genre: String(ctx.query.get("g") || ""),
+                    language: String(ctx.query.get("l") || ""),
+                    skip: Math.max(0, Math.floor(Number(ctx.query.get("skip")) || 0)),
+                    perPage: COUNTRY_PAGE,
+                    status: capability.status,
+                    languageName: (raw) => host.languageName(raw)
+                }));
+            }
+        },
+        {
+            /*
+                The guide: region chips (this household's countries, then
+                everywhere), genres, languages. `c` picks the region; with
+                none it opens on the household's first country, because
+                that is where nearly every visit is headed.
+            */
+            method: "GET",
+            path: "/tv/browse",
+            async handle(ctx) {
+                const signedIn = Boolean(ctx.client.session?.authKey);
+                const all = await countries();
+                const regions = host.liveCountries
+                    .map((code) => all.find((entry) => entry.code === code))
+                    .filter((entry) => Boolean(entry))
+                    .map((entry) => ({ code: entry.code, name: entry.name, flag: entry.flag }));
+                const asked = ctx.query.has("c") ? String(ctx.query.get("c") || "").toUpperCase() : regions[0]?.code || "";
+                const country = asked ? all.find((entry) => entry.code === asked) : undefined;
+                const code = country ? country.code : "";
+                const capability = await host.requestVpnCapability("live-tv", ctx.client.session);
+                return html(browsePage(ctx.client, signedIn, {
+                    scope: {
+                        country: code,
+                        title: country ? country.name : "All countries",
+                        flag: country ? country.flag : "",
+                        path: "/tv/browse",
+                        regionChips: true
+                    },
+                    regions,
+                    channels: code ? await channelsIn(code) : await allChannelsRanked(),
+                    genre: String(ctx.query.get("g") || ""),
+                    language: String(ctx.query.get("l") || ""),
+                    skip: Math.max(0, Math.floor(Number(ctx.query.get("skip")) || 0)),
+                    perPage: COUNTRY_PAGE,
+                    status: capability.status,
+                    languageName: (raw) => host.languageName(raw)
+                }));
+            }
+        },
+        {
+            method: "GET",
+            path: "/tv/world",
+            async handle(ctx) {
+                const signedIn = Boolean(ctx.client.session?.authKey);
+                const capability = await host.requestVpnCapability("live-tv", ctx.client.session);
+                return html(worldPage(ctx.client, signedIn, await countries(), host.liveCountries, capability.status));
             }
         },
         {
@@ -405,7 +470,7 @@ const createPlugin = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.5.0",
+        version: "1.6.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
@@ -437,6 +502,13 @@ const createPlugin = (host, configDir) => {
             catch {
                 down = capability.status?.routeLive === true;
             }
+            /*
+                Every mirror that needs the relay -- a Referer, a
+                User-Agent, a segment decoder -- is made known before core
+                asks for its playlist. See `relay.ts`.
+            */
+            for (const stream of channel.streams)
+                registerStream(stream);
             const list = await channelStreamList(channel, proxy, down, host.undecodableFor(session));
             const order = await rankReachability(list, [], session);
             return order
@@ -478,6 +550,7 @@ const createPlugin = (host, configDir) => {
                 };
             });
         },
+        liveFetch,
         async searchContent(query, limit) {
             const channels = await searchChannels(query, limit);
             return channels.map((channel) => ({ id: channel.id, name: channel.name, logo: channel.logo }));

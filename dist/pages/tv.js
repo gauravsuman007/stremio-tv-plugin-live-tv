@@ -28,6 +28,7 @@
  */
 import { chanCard, chrome, escape, failureNote, KEYS, page, vpnBadge, vpnSheet } from "../render.js";
 import { describeChannel } from "../channels.js";
+import { liveNav } from "./browse.js";
 /** One country tile: the flag, the name, and how many channels are behind it. */
 function countryCard(client, country) {
     return `<span class="card flagcard"><a href="${escape(client.link(`/tv/country/${encodeURIComponent(country.code)}`))}">
@@ -139,7 +140,7 @@ ${recent.map((entry) => chanCard(client, entry, true)).join("\n")}
         : "";
     const places = countries.length
         ? `<section class="shelf">
-<h2>Channels by country <span class="by">Most channels first</span></h2>
+<h2>Channels by country <a class="by" href="${escape(client.link("/tv/world"))}">Every country, in World TV &rsaquo;</a></h2>
 <div class="strip">
 ${countries.map((country) => countryCard(client, country)).join("\n")}
 </div>
@@ -166,7 +167,7 @@ ${countries.map((country) => countryCard(client, country)).join("\n")}
         body: `${chrome(client, "live", signedIn)}
 <div class="tvhead">
 <h1>Live TV</h1>
-<p class="bar"><a class="go" href="${escape(client.link("/tv/search"))}">&#9906; Search channels</a> <a class="step" href="${escape(client.link("/tv/rails"))}">&#9776; Arrange rails</a> <a class="step" href="${escape(client.link("/tv/scrapers"))}">Sources</a></p>
+${liveNav(client, "home")}
 </div>
 ${routing(client, status, "/tv")}
 ${failureNote(failures)}
@@ -176,42 +177,6 @@ ${down
 ${rails}
 ${sweepLine(sweep, sweepAction)}
 <p class="hint">${escape("Ordered by what last night's check found first, then by how widely each channel is carried, what it broadcasts and whether it is a major in its own market -- a stand-in for popularity, not an audience figure.")}</p>`
-    });
-}
-/**
- * One country, a page at a time.
- *
- * PAGED, AND NOT BECAUSE OF THE SCROLLBAR. India alone has 745 channels,
- * and a document with that many cards in it is a quarter of a megabyte of
- * HTML and 745 images for a 2016 panel to lay out -- which is not a long
- * page on that hardware, it is a page that takes seconds to become
- * interactive. Sixty at a time is a screenful and a half.
- */
-export function countryPage(client, signedIn, country, channels, status, skip, perPage) {
-    const shown = channels.slice(skip, skip + perPage);
-    const at = (from) => `${client.link(`/tv/country/${encodeURIComponent(country.code)}`)}${from ? `?skip=${from}` : ""}`;
-    const pager = channels.length > perPage
-        ? `<p class="bar">${skip > 0
-            ? `<a class="step" href="${escape(at(Math.max(0, skip - perPage)))}">&lsaquo; Back</a> `
-            : ""}${skip + perPage < channels.length
-            ? `<a class="step" href="${escape(at(skip + perPage))}">More &rsaquo;</a>`
-            : ""}</p>`
-        : "";
-    return page({
-        title: `Live TV: ${country.name}`,
-        body: `${chrome(client, "live", signedIn)}
-<div class="tvhead">
-<h1><span class="flag">${escape(country.flag || "")}</span> ${escape(country.name)}</h1>
-<p class="bar"><a class="step" href="${escape(client.link("/tv"))}">&lsaquo; Live TV</a> <a class="step" href="${escape(client.link("/tv/search"))}">&#9906; Search channels</a></p>
-</div>
-${routing(client, status, `/tv/country/${encodeURIComponent(country.code)}`)}
-${shown.length
-            ? `<p class="hint">${escape(`${skip + 1}-${skip + shown.length} of ${channels.length} channels, most widely carried first`)}</p>
-<div class="wall">
-${shown.map((channel) => chanCard(client, { ...channel, note: describeChannel(channel) })).join("\n")}
-</div>
-${pager}`
-            : `<p class="empty">No channels for ${escape(country.name)}.</p>`}`
     });
 }
 /**
