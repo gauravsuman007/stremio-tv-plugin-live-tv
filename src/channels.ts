@@ -53,6 +53,7 @@ import { spawn } from "node:child_process";
 import { pluginConfig as config } from "./plugin-config.js";
 import { host } from "./host.js";
 import { relayAvailable } from "./relay-support.js";
+import { languageLabel, languagesOf } from "./taxonomy.js";
 import { allScrapers, beginScraperRun, endScraperRun, lastRun, recordRun, scraperEnabled, scraperStopRequested } from "./scrapers.js";
 import type { ScrapedCatalogue, Scraper } from "./scraper-types.js";
 import type { Addon, AddonFailure, MetaDetail, MetaPreview, Sourced, Stream } from "./types.js";
@@ -2318,7 +2319,7 @@ export function select(built: Index, want: Pick, home: string[] = []): Channel[]
     const kept = built.all.filter((channel) => {
         if (countries.length && !countries.includes(channel.country)) return false;
         if (categories.length && !categories.some((c) => channel.categories.includes(c))) return false;
-        if (languages.length && !languages.some((l) => channel.languages.includes(l))) return false;
+        if (languages.length && !languages.some((l) => languagesOf(channel).includes(l))) return false;
 
         return true;
     });
@@ -2437,6 +2438,16 @@ export async function channelsIn(code: string): Promise<Channel[]> {
     );
 }
 
+/**
+ * Every channel, for the Browse page's "All countries" -- ordered the way
+ * a country page is (what the night proved first), for the same reason.
+ */
+export async function allChannelsRanked(): Promise<Channel[]> {
+    const built = await channelIndex();
+
+    return [...(built?.all || [])].sort((a, b) => proofOf(b) - proofOf(a) || better(a, b));
+}
+
 /** Every country that has channels, most first. */
 export async function countries(): Promise<Country[]> {
     return (await channelIndex())?.countries || [];
@@ -2527,6 +2538,44 @@ export async function liveRails(
             channels,
             more: countryHref(code)
         });
+    }
+
+    /*
+        A RAIL PER LANGUAGE, for the household's first market when it
+        speaks more than one -- which for India is the whole story: the
+        country rail above is Hindi and English by sheer weight of
+        numbers, and a Tamil or Bengali household would otherwise have to
+        go looking for every channel it actually watches. The market's own
+        biggest language is skipped (the country rail already is that
+        rail), and only languages with a real rail's worth of channels get
+        one, at most six.
+    */
+    const first = home[0];
+
+    if (first) {
+        const local = built.byCountry.get(first) || [];
+        const counts = new Map<string, number>();
+
+        for (const channel of local) {
+            for (const code of languagesOf(channel)) counts.set(code, (counts.get(code) || 0) + 1);
+        }
+
+        const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+
+        for (const [code, count] of ranked.slice(1, 7)) {
+            if (count < MIN_RAIL) continue;
+
+            const channels = select(built, { countries: [first], languages: [code], limit: RAIL });
+            const name = languageLabel(code, (raw) => languages.find((entry) => entry.code === raw)?.name || "");
+
+            rails.push({
+                id: `lang:${first}:${code}`,
+                heading: `${name} channels`,
+                by: `In ${named.get(first) || first}`,
+                channels,
+                more: `${countryHref(first)}?l=${encodeURIComponent(code)}`
+            });
+        }
     }
 
     const themed: { id: string; heading: string; categories: string[] }[] = [

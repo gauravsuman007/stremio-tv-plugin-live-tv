@@ -19,8 +19,10 @@ import {
     channelIndex,
     channelMeta,
     channelStreamList,
+    allChannelsRanked,
     channelsIn,
     codecFor,
+    countries,
     countryNamed,
     describeChannel,
     findChannel,
@@ -38,7 +40,8 @@ import {
     flushChecks,
     type Channel
 } from "./channels.js";
-import { channelSearchPage, countryPage, livePage } from "./pages/tv.js";
+import { channelSearchPage, livePage } from "./pages/tv.js";
+import { browsePage, worldPage } from "./pages/browse.js";
 import { arrange, moved, railsPage, visibleRails, type RailSlot } from "./pages/rails.js";
 import {
     forgetGithubSource,
@@ -507,6 +510,11 @@ const createPlugin: PluginFactory = (host, configDir) => {
             }
         },
         {
+            /*
+                One country, as a Browse page with the region fixed: genres
+                down the side, languages along the top where there is a
+                choice. See `pages/browse.ts`.
+            */
             method: "GET",
             path: "/tv/country/:code",
             async handle(ctx) {
@@ -519,16 +527,70 @@ const createPlugin: PluginFactory = (host, configDir) => {
                 const capability = await host.requestVpnCapability("live-tv", ctx.client.session);
 
                 return html(
-                    countryPage(
-                        ctx.client,
-                        signedIn,
-                        country,
-                        await channelsIn(code),
-                        capability.status,
-                        Math.max(0, Math.floor(Number(ctx.query.get("skip")) || 0)),
-                        COUNTRY_PAGE
-                    )
+                    browsePage(ctx.client, signedIn, {
+                        scope: { country: code, title: country.name, flag: country.flag, path: `/tv/country/${encodeURIComponent(code)}`, regionChips: false },
+                        regions: [],
+                        channels: await channelsIn(code),
+                        genre: String(ctx.query.get("g") || ""),
+                        language: String(ctx.query.get("l") || ""),
+                        skip: Math.max(0, Math.floor(Number(ctx.query.get("skip")) || 0)),
+                        perPage: COUNTRY_PAGE,
+                        status: capability.status,
+                        languageName: (raw) => host.languageName(raw)
+                    })
                 );
+            }
+        },
+        {
+            /*
+                The guide: region chips (this household's countries, then
+                everywhere), genres, languages. `c` picks the region; with
+                none it opens on the household's first country, because
+                that is where nearly every visit is headed.
+            */
+            method: "GET",
+            path: "/tv/browse",
+            async handle(ctx) {
+                const signedIn = Boolean((ctx.client.session as { authKey?: string } | undefined)?.authKey);
+                const all = await countries();
+                const regions = host.liveCountries
+                    .map((code) => all.find((entry) => entry.code === code))
+                    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+                    .map((entry) => ({ code: entry.code, name: entry.name, flag: entry.flag }));
+                const asked = ctx.query.has("c") ? String(ctx.query.get("c") || "").toUpperCase() : regions[0]?.code || "";
+                const country = asked ? all.find((entry) => entry.code === asked) : undefined;
+                const code = country ? country.code : "";
+                const capability = await host.requestVpnCapability("live-tv", ctx.client.session);
+
+                return html(
+                    browsePage(ctx.client, signedIn, {
+                        scope: {
+                            country: code,
+                            title: country ? country.name : "All countries",
+                            flag: country ? country.flag : "",
+                            path: "/tv/browse",
+                            regionChips: true
+                        },
+                        regions,
+                        channels: code ? await channelsIn(code) : await allChannelsRanked(),
+                        genre: String(ctx.query.get("g") || ""),
+                        language: String(ctx.query.get("l") || ""),
+                        skip: Math.max(0, Math.floor(Number(ctx.query.get("skip")) || 0)),
+                        perPage: COUNTRY_PAGE,
+                        status: capability.status,
+                        languageName: (raw) => host.languageName(raw)
+                    })
+                );
+            }
+        },
+        {
+            method: "GET",
+            path: "/tv/world",
+            async handle(ctx) {
+                const signedIn = Boolean((ctx.client.session as { authKey?: string } | undefined)?.authKey);
+                const capability = await host.requestVpnCapability("live-tv", ctx.client.session);
+
+                return html(worldPage(ctx.client, signedIn, await countries(), host.liveCountries, capability.status));
             }
         },
         {
