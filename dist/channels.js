@@ -648,6 +648,10 @@ export async function runScraperNow(id) {
 export function isChannelId(id) {
     return id.startsWith(PREFIX) || id.startsWith(LIVE_PREFIX);
 }
+/** The channel, if the index is already built -- for a page that cannot wait. */
+export function peekChannel(id) {
+    return index?.byId.get(id) || null;
+}
 export async function findChannel(id) {
     const built = await channelIndex();
     return built?.byId.get(id) || null;
@@ -1619,6 +1623,18 @@ function flagFor(channel) {
     if (!/^[A-Z]{2}$/.test(code))
         return "";
     return String.fromCodePoint(...[...code].map((letter) => 0x1f1e6 + letter.charCodeAt(0) - 65));
+}
+/**
+ * Where a channel is from and what it speaks, as pills: "🇬🇧 United
+ * Kingdom", "English". The same words the title page shows, for a channel
+ * card and for the player's chip row (core plugin API 1.3.0).
+ */
+export function regionChips(channel, languages = 2) {
+    const country = channel.countryName || channel.country;
+    return [
+        country ? [flagFor(channel), country].filter(Boolean).join(" ") : "",
+        ...languagesOf(channel).slice(0, languages).map((code) => languageLabel(code, (raw) => host.languageName(raw)))
+    ].filter(Boolean);
 }
 /** A channel's genre and languages, named, for the title page's pills. */
 export function channelFacts(channel) {

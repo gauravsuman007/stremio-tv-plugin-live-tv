@@ -9,9 +9,19 @@
  * capture `undefined`.
  */
 import { host } from "./host.js";
+import { peekChannel, regionChips } from "./channels.js";
 export const escape = (value) => host.render.escape(value);
 export const page = (options) => host.render.page(options);
-export const chanCard = (client, channel, direct, lazy) => host.render.chanCard(client, channel, direct, lazy);
+export const chanCard = (client, channel, direct, lazy) => {
+    /*
+        Every card carries its country and language (core API 1.3.0; an
+        older core ignores the field). A favourite or a recently watched
+        entry is only an id, name and logo, so it is looked up.
+    */
+    const known = channel.chips ? null : peekChannel(channel.id);
+    const chips = channel.chips || (known ? regionChips(known, 1) : undefined);
+    return host.render.chanCard(client, chips && chips.length ? { ...channel, chips } : channel, direct, lazy);
+};
 export const chrome = (client, current, signedIn) => host.render.chrome(client, current, signedIn);
 export const art = (client, url) => host.render.art(client, url);
 export const failureNote = (failures) => host.render.failureNote(failures);

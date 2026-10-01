@@ -4,7 +4,7 @@
  * Source of truth: stremio-tv `src/plugin-types.ts`. Structurally
  * identical -- no npm workspace link between the two repos in this pass,
  * so this is kept in sync by eye, the same as `types.ts` and `host.ts`.
- * Synced against core's `PLUGIN_API_VERSION` "1.2.0" as of this pass --
+ * Synced against core's `PLUGIN_API_VERSION` "1.3.0" as of this pass --
  * see that constant's own doc comment in the core file for the
  * MAJOR/MINOR/PATCH rule a future sync needs to check against, and bump
  * `PLUGIN_API_VERSION` below (and `plugin.ts`'s `apiVersion` field)
@@ -13,4 +13,4 @@
 /** The plugin contract's own version, independent of any one plugin's
  *  `version` -- see `StremioTvPlugin.apiVersion` and core's own doc
  *  comment on this same constant for the versioning rule. */
-export const PLUGIN_API_VERSION = "1.2.0";
+export const PLUGIN_API_VERSION = "1.3.0";
