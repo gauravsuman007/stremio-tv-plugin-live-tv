@@ -112,7 +112,7 @@ export interface PluginHost {
         /** `lazy` (core API 1.2.0): name the logo in `data-src`, for core's
          *  shared script to load as it nears the screen. An older core
          *  ignores the extra argument and loads it at once. */
-        chanCard(client: Client, channel: { id: string; name: string; logo: string; note?: string }, direct?: boolean, lazy?: boolean): string;
+        chanCard(client: Client, channel: { id: string; name: string; logo: string; note?: string; chips?: string[] }, direct?: boolean, lazy?: boolean): string;
         failureNote(failures: { addon: string; reason: string }[]): string;
         KEYS: string[];
     };

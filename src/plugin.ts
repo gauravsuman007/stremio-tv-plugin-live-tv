@@ -18,6 +18,7 @@ import { chanCard, chrome, escape, page } from "./render.js";
 import {
     channelIndex,
     channelMeta,
+    regionChips,
     channelStreamList,
     allChannelsRanked,
     channelsIn,
@@ -123,6 +124,10 @@ function liveSlots(
 
     return slots;
 }
+
+/** A list with a clock: the Programs button. Plain SVG, as core requires. */
+const PROGRAMS_ICON =
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 6h9M3.5 11h7M3.5 16h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="17" cy="14" r="5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M17 11.5V14l1.8 1.2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
 
 const createPlugin: PluginFactory = (host, configDir) => {
     setHost(host);
@@ -644,7 +649,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.8.0",
+        version: "1.9.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
@@ -666,13 +671,11 @@ const createPlugin: PluginFactory = (host, configDir) => {
             const meta = channelMeta(channel);
             /*
                 WHAT IS ON, in the one line of text every core can show.
-                Waits briefly for a first fetch; a slower one lands in the
-                cache and is on the page the next time it is opened.
+                Never waited for: core asks for this on the press of Play
+                too. A schedule not cached yet is fetched in the
+                background and is on the page the next time it opens.
             */
-            const programmes = await Promise.race([
-                guide.programmesFor(channel.id).catch(() => null),
-                new Promise<null>((resolve) => setTimeout(() => resolve(null), 900))
-            ]);
+            const programmes = guide.peek(channel.id);
             const line = programmes ? nowLine(programmes) : "";
 
             return {
@@ -680,16 +683,37 @@ const createPlugin: PluginFactory = (host, configDir) => {
                 description: line ? `${line}\n${meta.description || ""}`.trim() : meta.description
             } as unknown as Record<string, unknown>;
         },
-        async programmesFor(type, id, context) {
+        /*
+            THE PLAYER (core API 1.3.0): where the channel is from and what
+            it speaks, first in the chip row; and a Programs button, only
+            when there is a schedule to show. Core waits 800 ms for this;
+            a channel's first schedule usually arrives well inside that,
+            and the last 50 played are kept warm (see `epg.ts`).
+        */
+        async playerExtras(type, id) {
             if (!(type === "tv" && isChannelId(id))) return null;
 
             const channel = await findChannel(id);
 
             if (!channel) return null;
 
-            if (context?.playing) guide.remember(channel.id);
+            const programmes = (await guide.programmesFor(channel.id).catch(() => null)) || [];
+            const ahead = Date.now() + 24 * 3_600_000;
+            const items = programmes
+                .filter((programme) => programme.start < ahead)
+                .map((programme) => ({
+                    label: programme.title,
+                    note: programme.description ? programme.description.slice(0, 160) : undefined,
+                    start: programme.start,
+                    stop: programme.stop
+                }));
 
-            return guide.programmesFor(channel.id);
+            return {
+                chips: regionChips(channel),
+                buttons: items.length
+                    ? [{ id: "programs", label: "Programs", heading: "Programs", icon: PROGRAMS_ICON, items }]
+                    : []
+            };
         },
         async streamsFor(type, id, session) {
             if (!(type === "tv" && isChannelId(id))) return [];

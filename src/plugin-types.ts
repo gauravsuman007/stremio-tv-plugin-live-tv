@@ -4,7 +4,7 @@
  * Source of truth: stremio-tv `src/plugin-types.ts`. Structurally
  * identical -- no npm workspace link between the two repos in this pass,
  * so this is kept in sync by eye, the same as `types.ts` and `host.ts`.
- * Synced against core's `PLUGIN_API_VERSION` "1.2.0" as of this pass --
+ * Synced against core's `PLUGIN_API_VERSION` "1.3.0" as of this pass --
  * see that constant's own doc comment in the core file for the
  * MAJOR/MINOR/PATCH rule a future sync needs to check against, and bump
  * `PLUGIN_API_VERSION` below (and `plugin.ts`'s `apiVersion` field)
@@ -41,7 +41,7 @@ export type LiveStream = SharedLiveStream;
 /** The plugin contract's own version, independent of any one plugin's
  *  `version` -- see `StremioTvPlugin.apiVersion` and core's own doc
  *  comment on this same constant for the versioning rule. */
-export const PLUGIN_API_VERSION = "1.2.0";
+export const PLUGIN_API_VERSION = "1.3.0";
 
 /** Source of truth: stremio-tv `src/plugin-types.ts` `LiveFetched` -- what
  *  `liveFetch` hands back: a fetched response whose body may be any
@@ -141,14 +141,9 @@ export interface StremioTvPlugin {
      *  a segment, a key) before core fetches it itself; `null` means "not
      *  mine". Must honour `proxy`. See `relay.ts`. */
     liveFetch?(url: string, options: { proxy: string }): Promise<LiveFetched | null>;
-    /** PROPOSED for core API 1.3.0 -- not in core yet, see `epg.ts` and
-     *  the README. A channel's programme schedule, every time an absolute
-     *  instant (epoch ms) so whoever draws it uses the VIEWER's own zone.
-     *  `playing` is true when asked from the player rather than the title
-     *  page. `null` when there is no schedule. An older core never calls
-     *  it, which is harmless: the title page still gets the now/next line
-     *  through `metaFor`'s description. */
-    programmesFor?(type: string, id: string, context?: { playing?: boolean }): Promise<Programme[] | null>;
+    /** API 1.3.0: chips drawn first in the player's chip row, and
+     *  buttons drawn rightmost in its control bar (see `PlayerExtras`). */
+    playerExtras?(type: string, id: string, session?: unknown): Promise<PlayerExtras | null>;
     searchContent?(query: string, limit: number): Promise<{ id: string; name: string; logo: string }[]>;
     settingsLink?: { label: string; href: string };
     configDir: string;
@@ -163,6 +158,31 @@ export interface Programme {
     subtitle?: string;
     description?: string;
     category?: string;
+}
+
+/** API 1.3.0. Source of truth: stremio-tv `src/plugin-types.ts`. A row of
+ *  a player button's list; `start`/`stop` are epoch ms, formatted by the
+ *  television in its own zone. */
+export interface PlayerPanelItem {
+    label: string;
+    note?: string;
+    start?: number;
+    stop?: number;
+}
+
+/** API 1.3.0: a button at the right end of the player's control bar. */
+export interface PlayerButton {
+    id: string;
+    label: string;
+    icon?: string;
+    heading?: string;
+    items: PlayerPanelItem[];
+}
+
+/** API 1.3.0: what `playerExtras` hands back. */
+export interface PlayerExtras {
+    chips?: string[];
+    buttons?: PlayerButton[];
 }
 
 export type PluginFactory = (host: PluginHost, configDir: string) => StremioTvPlugin;

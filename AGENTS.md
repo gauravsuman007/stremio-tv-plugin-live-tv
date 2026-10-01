@@ -112,7 +112,11 @@ normalized name within the same country -- loosening it is how look-alike
 channels ("Star Sports 1" / "Star Sports 1 Hindi") start sharing a guide;
 `<configDir>/epg-overrides.json` pins or blocks a channel instead. Every
 time is an epoch instant; only relative text ("35 min left") is written
-here, never a clock time. Today the guide reaches the title page as a line
-in `metaFor`'s description. `programmesFor` (in `plugin-types.ts`) is a
-PROPOSED core API 1.3.0 hook for the player title and a proper title-page
-panel; core does not call it yet.
+here, never a clock time. The guide reaches people two ways: a "Now / Next"
+line in `metaFor`'s description (from the cache only -- core calls
+`metaFor` on Play too, so it never waits), and, from core plugin API 1.3.0,
+`playerExtras`: a Programs button at the right end of the player's control
+bar (shown only when there is a schedule; core formats every time on the
+television in its own zone) plus the country and language chips that lead
+the player's chip row. The same chips go on every channel card
+(`render.ts`'s `chanCard`, via `regionChips`).

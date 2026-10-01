@@ -10,6 +10,7 @@
  */
 
 import { host } from "./host.js";
+import { peekChannel, regionChips } from "./channels.js";
 
 import type { Client, PageOptions, Tab, VpnStatus } from "./host.js";
 
@@ -17,10 +18,20 @@ export const escape = (value: unknown): string => host.render.escape(value);
 export const page = (options: PageOptions): string => host.render.page(options);
 export const chanCard = (
     client: Client,
-    channel: { id: string; name: string; logo: string; note?: string },
+    channel: { id: string; name: string; logo: string; note?: string; chips?: string[] },
     direct?: boolean,
     lazy?: boolean
-): string => host.render.chanCard(client, channel, direct, lazy);
+): string => {
+    /*
+        Every card carries its country and language (core API 1.3.0; an
+        older core ignores the field). A favourite or a recently watched
+        entry is only an id, name and logo, so it is looked up.
+    */
+    const known = channel.chips ? null : peekChannel(channel.id);
+    const chips = channel.chips || (known ? regionChips(known, 1) : undefined);
+
+    return host.render.chanCard(client, chips && chips.length ? { ...channel, chips } : channel, direct, lazy);
+};
 export const chrome = (client: Client, current: Tab, signedIn: boolean): string =>
     host.render.chrome(client, current, signedIn);
 export const art = (client: Client, url: string | undefined): string => host.render.art(client, url);
