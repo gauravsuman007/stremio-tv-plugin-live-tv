@@ -30,6 +30,14 @@ export const pluginConfig = {
     get scraperResultsDir(): string {
         return base ? `${base}/scraper-results` : "";
     },
+    /** The programme-guide cache: directory, schedules, warm set. */
+    get epgStore(): string {
+        return base ? `${base}/epg-cache.json` : "";
+    },
+    /** Hand-made guide matches: `{"<channel id>": "<epg.pw id>" | null}`. */
+    get epgOverrides(): string {
+        return base ? `${base}/epg-overrides.json` : "";
+    },
     get liveChecks(): string {
         return base ? `${base}/live-checks.json` : "";
     },

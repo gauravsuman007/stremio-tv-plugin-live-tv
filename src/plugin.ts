@@ -70,6 +70,8 @@ import { startScraperScheduler, stopScraperScheduler } from "./scraper-scheduler
 import { lastTaskRun, runScraperTask } from "./scraper-tasks.js";
 import { scheduleSweep, stopSweep, sweep, sweepState } from "./sweep.js";
 import { liveFetch, registerStream } from "./relay.js";
+import { GuideStore, nowLine } from "./epg.js";
+import { pluginConfig } from "./plugin-config.js";
 
 import { PLUGIN_API_VERSION } from "./plugin-types.js";
 import type { PluginFactory, PluginRoute, PluginRouteContext } from "./plugin-types.js";
@@ -152,6 +154,25 @@ const createPlugin: PluginFactory = (host, configDir) => {
     loadChecks();
     scheduleSweep();
     startScraperScheduler();
+
+    /*
+        THE PROGRAMME GUIDE. Fetched per channel when one is opened or
+        played, cached until its timeline runs out or it is 12 hours old,
+        and the last 50 channels kept warm every 12 hours -- see `epg.ts`.
+        Stopped by `dispose()` like every other timer here.
+    */
+    const guide = new GuideStore({
+        file: pluginConfig.epgStore,
+        overridesFile: pluginConfig.epgOverrides,
+        lookup: async (id) => {
+            const channel = await findChannel(id);
+
+            return channel ? { id: channel.id, name: channel.name, country: channel.country } : null;
+        },
+        log: (line) => console.log(line)
+    });
+
+    guide.startWarming();
 
     async function sendScrapersPage(client: PluginRouteContext["client"], signedIn: boolean, session: unknown, note: { text: string; ok: boolean } | null) {
         const all = allScrapers();
@@ -623,7 +644,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.7.0",
+        version: "1.8.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
@@ -631,6 +652,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
             stopChannelRefresh();
             stopSweep();
             flushChecks();
+            guide.stop();
         },
         routes: () => routes,
         ownsContentId: (type, id) => type === "tv" && isChannelId(id),
@@ -639,7 +661,35 @@ const createPlugin: PluginFactory = (host, configDir) => {
 
             const channel = await findChannel(id);
 
-            return channel ? (channelMeta(channel) as unknown as MetaDetail as unknown as Record<string, unknown>) : null;
+            if (!channel) return null;
+
+            const meta = channelMeta(channel);
+            /*
+                WHAT IS ON, in the one line of text every core can show.
+                Waits briefly for a first fetch; a slower one lands in the
+                cache and is on the page the next time it is opened.
+            */
+            const programmes = await Promise.race([
+                guide.programmesFor(channel.id).catch(() => null),
+                new Promise<null>((resolve) => setTimeout(() => resolve(null), 900))
+            ]);
+            const line = programmes ? nowLine(programmes) : "";
+
+            return {
+                ...meta,
+                description: line ? `${line}\n${meta.description || ""}`.trim() : meta.description
+            } as unknown as Record<string, unknown>;
+        },
+        async programmesFor(type, id, context) {
+            if (!(type === "tv" && isChannelId(id))) return null;
+
+            const channel = await findChannel(id);
+
+            if (!channel) return null;
+
+            if (context?.playing) guide.remember(channel.id);
+
+            return guide.programmesFor(channel.id);
         },
         async streamsFor(type, id, session) {
             if (!(type === "tv" && isChannelId(id))) return [];

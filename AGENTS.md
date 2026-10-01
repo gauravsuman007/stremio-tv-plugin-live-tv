@@ -100,3 +100,19 @@ A decoder mirror is dropped at merge time (`fromScraper`) unless the
 scraper really exports that decoder AND `host.pluginApiVersion` is at
 least 1.2.0 (`relay-support.ts`): offered anywhere else, it would hand a
 player a picture instead of video. `test/relay.mjs` covers all of this.
+
+## The programme guide (`epg.ts`)
+
+Schedules come from epg.pw's per-channel JSON API, fetched when a channel
+is opened or played and cached until its timeline ends or it is 12 hours
+old; the last 50 channels opened or played are refreshed every 12 hours
+(`GuideStore.startWarming`, stopped in `dispose()`). The channel directory
+is the head of epg.pw's XMLTV file, re-read weekly. Matching is exact
+normalized name within the same country -- loosening it is how look-alike
+channels ("Star Sports 1" / "Star Sports 1 Hindi") start sharing a guide;
+`<configDir>/epg-overrides.json` pins or blocks a channel instead. Every
+time is an epoch instant; only relative text ("35 min left") is written
+here, never a clock time. Today the guide reaches the title page as a line
+in `metaFor`'s description. `programmesFor` (in `plugin-types.ts`) is a
+PROPOSED core API 1.3.0 hook for the player title and a proper title-page
+panel; core does not call it yet.

@@ -141,9 +141,28 @@ export interface StremioTvPlugin {
      *  a segment, a key) before core fetches it itself; `null` means "not
      *  mine". Must honour `proxy`. See `relay.ts`. */
     liveFetch?(url: string, options: { proxy: string }): Promise<LiveFetched | null>;
+    /** PROPOSED for core API 1.3.0 -- not in core yet, see `epg.ts` and
+     *  the README. A channel's programme schedule, every time an absolute
+     *  instant (epoch ms) so whoever draws it uses the VIEWER's own zone.
+     *  `playing` is true when asked from the player rather than the title
+     *  page. `null` when there is no schedule. An older core never calls
+     *  it, which is harmless: the title page still gets the now/next line
+     *  through `metaFor`'s description. */
+    programmesFor?(type: string, id: string, context?: { playing?: boolean }): Promise<Programme[] | null>;
     searchContent?(query: string, limit: number): Promise<{ id: string; name: string; logo: string }[]>;
     settingsLink?: { label: string; href: string };
     configDir: string;
+}
+
+/** One programme on a channel. `start`/`stop` are epoch milliseconds (UTC
+ *  instants), never clock times. */
+export interface Programme {
+    start: number;
+    stop: number;
+    title: string;
+    subtitle?: string;
+    description?: string;
+    category?: string;
 }
 
 export type PluginFactory = (host: PluginHost, configDir: string) => StremioTvPlugin;
