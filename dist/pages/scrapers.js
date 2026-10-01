@@ -40,7 +40,46 @@ export function importSummary(result) {
         parts.push(`failed ${result.errors.map((e) => `${e.file}: ${e.error}`).join("; ")}`);
     return parts.length ? parts.join(". ") + "." : "Nothing in dist/ to import.";
 }
-export function scrapersPage(client, signedIn, rows, githubSources = [], importNote = null, vpn = null) {
+function percent(part, whole) {
+    return whole ? `${Math.round((part / whole) * 100)}%` : "0%";
+}
+/**
+ * THE PROGRAMME GUIDE, on the Sources page: when the whole guide was last
+ * fetched and how that went, how many of this index's channels it matched
+ * (and by country, since matching never crosses one), and the switch for
+ * per-channel fetching.
+ */
+export function guideSection(client, guide) {
+    const status = guide.status;
+    const fetched = guide.running
+        ? "Fetching the guide now&hellip;"
+        : !status
+            ? "Not fetched yet &mdash; the first fetch runs shortly after start."
+            : status.ok
+                ? `Last fetched ${escape(since(status.at))}: ${status.programmes.toLocaleString("en")} programmes from ${status.guideChannels.toLocaleString("en")} guide channels, in ${status.seconds}s. Next fetch 12 hours after that.`
+                : `Last fetch failed ${escape(since(status.at))}: ${escape(status.error || "unknown error")}. The schedules from the fetch before it are still in use.`;
+    const mapping = status && status.channels
+        ? `<p class="hint"><strong>${status.matched.toLocaleString("en")}</strong> of ${status.channels.toLocaleString("en")} channels matched to a guide (${percent(status.matched, status.channels)}); <strong>${status.unmatched.toLocaleString("en")}</strong> could not be${status.noCountry ? `, ${status.noCountry.toLocaleString("en")} of them because the channel has no country` : ""}.</p>
+<ul class="rails">
+${status.countries
+            .slice(0, 12)
+            .map((country) => `<li class="railrow"><span class="railname">${escape(country.code === "--" ? "No country" : country.code)}</span><span class="railsay">${country.matched} of ${country.channels} matched (${percent(country.matched, country.channels)})</span></li>`)
+            .join("\n")}
+</ul>`
+        : "";
+    const dynamicNote = guide.dynamic
+        ? `On: a channel the whole-guide fetch did not cover is looked up on its own when it is opened or played, and the last ${guide.warm || 0} such channels are refreshed every 12 hours.`
+        : "Off: only the whole-guide fetch is used. Switch on to also look up a channel on its own when it is opened or played.";
+    return `<h3 class="lead">Programme guide</h3>
+<p class="hint">The whole guide (epg.pw) is fetched every 12 hours and matched to every channel here by exact name, and only ever within the channel&rsquo;s own country &mdash; never across countries.</p>
+<p class="hint">${fetched}</p>
+${mapping}
+<form method="POST" action="${escape(client.link("/tv/scrapers/guide"))}" class="inline"><input type="hidden" name="refresh" value="1"><button class="step" type="submit"${guide.running ? " disabled" : ""}>Fetch the guide now</button></form>
+<h3 class="lead">Per-channel guide fetching</h3>
+<p class="hint">${dynamicNote}</p>
+<form method="POST" action="${escape(client.link("/tv/scrapers/guide"))}" class="inline"><input type="hidden" name="dynamic" value="${guide.dynamic ? "off" : "on"}"><button class="step" type="submit">${guide.dynamic ? "Switch off" : "Switch on"}</button></form>`;
+}
+export function scrapersPage(client, signedIn, rows, githubSources = [], importNote = null, vpn = null, guide = null) {
     const list = rows
         .map((row) => {
         const status = row.running
@@ -107,6 +146,7 @@ ${vpnPanel}`
 <p class="hint">Every switched-on source is asked in the same nightly sweep, and a channel from one never crowds out a channel from another &mdash; only ranking decides what leads a rail. Switching a source off keeps its channels out of the index entirely, the next time it is rebuilt.</p>
 ${list.length ? `<ul class="rails">\n${list}\n</ul>` : `<p class="empty">No sources are configured.</p>`}
 <p class="bar"><a class="step" href="${escape(`${client.link("/tv/scrapers")}?reload=1`)}">Reload sources</a></p>
+${guide ? guideSection(client, guide) : ""}
 ${importNote ? `<p class="hint${importNote.ok ? "" : " error"}">${escape(importNote.text)}</p>` : ""}
 <h3 class="lead">Import from GitHub</h3>
 <p class="hint">Reads every <code>.mjs</code> file in a repository's <code>dist/</code> directory and drops in whichever ones are new or genuinely newer than what is already running &mdash; see &ldquo;Versioning&rdquo; below. A token is only needed for a private repository, and is remembered so you do not retype it on the next check.</p>

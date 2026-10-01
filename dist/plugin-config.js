@@ -31,6 +31,14 @@ export const pluginConfig = {
     get epgStore() {
         return base ? `${base}/epg-cache.json` : "";
     },
+    /** The whole guide, matched to our channels, and the last run's status. */
+    get epgGuide() {
+        return base ? `${base}/epg-guide.json` : "";
+    },
+    /** `{"dynamic": boolean}` -- per-channel guide fetching, off by default. */
+    get epgSettings() {
+        return base ? `${base}/epg-settings.json` : "";
+    },
     /** Hand-made guide matches: `{"<channel id>": "<epg.pw id>" | null}`. */
     get epgOverrides() {
         return base ? `${base}/epg-overrides.json` : "";
