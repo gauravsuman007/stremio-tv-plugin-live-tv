@@ -51,7 +51,7 @@ import { spawn } from "node:child_process";
 import { pluginConfig as config } from "./plugin-config.js";
 import { host } from "./host.js";
 import { relayAvailable } from "./relay-support.js";
-import { languageLabel, languagesOf } from "./taxonomy.js";
+import { genreLabel, genreOf, languageLabel, languagesOf } from "./taxonomy.js";
 import { allScrapers, beginScraperRun, endScraperRun, lastRun, recordRun, scraperEnabled, scraperStopRequested } from "./scrapers.js";
 const fetchVia = (url, options) => host.fetchVia(url, options);
 /** A rail's local slug, as a scraper may name it -- see `ScrapedRail.id`. */
@@ -1599,19 +1599,45 @@ export function channelPreview(channel) {
         posterShape: "square",
         background: channel.logo,
         description: describeChannel(channel),
-        genres: channel.categories
+        /*
+            The title page draws these as its fact pills (core's
+            `factChips`): the browse genre and the languages, in words --
+            "News · Tamil", not iptv-org's raw "news" and "tam".
+        */
+        genres: channelFacts(channel)
     };
 }
 /** The one line under a channel's name. Category, country, mirrors. */
 export function describeChannel(channel) {
     const carried = channel.streams.length === 1 ? "1 source" : `${channel.streams.length} sources`;
-    return [channel.network, channel.categories.join(", "), carried].filter(Boolean).join(" · ");
+    const genre = genreOf(channel);
+    return [channel.network, genre && genre !== "general" ? genreLabel(genre) : "", carried].filter(Boolean).join(" · ");
+}
+/** A country's flag, from its code (iptv-org's "UK" is GB's flag). */
+function flagFor(channel) {
+    const code = channel.country === "UK" ? "GB" : channel.country;
+    if (!/^[A-Z]{2}$/.test(code))
+        return "";
+    return String.fromCodePoint(...[...code].map((letter) => 0x1f1e6 + letter.charCodeAt(0) - 65));
+}
+/** A channel's genre and languages, named, for the title page's pills. */
+export function channelFacts(channel) {
+    const genre = genreOf(channel);
+    return [
+        genre && genre !== "general" ? genreLabel(genre) : "",
+        ...languagesOf(channel).slice(0, 2).map((code) => languageLabel(code, (raw) => host.languageName(raw)))
+    ].filter(Boolean);
 }
 export function channelMeta(channel) {
     return {
         ...channelPreview(channel),
         logo: channel.logo,
         country: channel.countryName || channel.country,
+        /*
+            The first fact pill on the title page (where a film has its
+            year): where the channel broadcasts from, with its flag.
+        */
+        releaseInfo: [flagFor(channel), channel.countryName || channel.country].filter(Boolean).join(" "),
         /*
             Live TV has no runtime, no year and no rating, and the title
             page renders each of those only when it has one -- so they are

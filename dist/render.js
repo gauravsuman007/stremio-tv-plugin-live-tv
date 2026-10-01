@@ -11,7 +11,7 @@
 import { host } from "./host.js";
 export const escape = (value) => host.render.escape(value);
 export const page = (options) => host.render.page(options);
-export const chanCard = (client, channel, direct) => host.render.chanCard(client, channel, direct);
+export const chanCard = (client, channel, direct, lazy) => host.render.chanCard(client, channel, direct, lazy);
 export const chrome = (client, current, signedIn) => host.render.chrome(client, current, signedIn);
 export const art = (client, url) => host.render.art(client, url);
 export const failureNote = (failures) => host.render.failureNote(failures);

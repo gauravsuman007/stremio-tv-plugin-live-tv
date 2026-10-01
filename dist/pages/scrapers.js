@@ -52,12 +52,12 @@ export function scrapersPage(client, signedIn, rows, githubSources = [], importN
                     : `failed ${since(row.run.at)}: ${row.run.error}`;
         const toggle = `<a class="step" href="${escape(`${client.link("/tv/scrapers")}?${row.enabled ? "off" : "on"}=${encodeURIComponent(row.id)}`)}">${row.enabled ? "Disable" : "Enable"}</a>`;
         const runToggle = row.running
-            ? `<form method="POST" action="${escape(client.link(`/tv/scrapers/${encodeURIComponent(row.id)}/stop`))}" style="display:inline"><button class="step" type="submit">Stop</button></form>`
-            : `<form method="POST" action="${escape(client.link(`/tv/scrapers/${encodeURIComponent(row.id)}/run`))}" style="display:inline"><button class="step" type="submit">Run now</button></form>`;
+            ? `<form method="POST" action="${escape(client.link(`/tv/scrapers/${encodeURIComponent(row.id)}/stop`))}" class="inline"><button class="step" type="submit">Stop</button></form>`
+            : `<form method="POST" action="${escape(client.link(`/tv/scrapers/${encodeURIComponent(row.id)}/run`))}" class="inline"><button class="step" type="submit">Run now</button></form>`;
         // A dialog needs a script and a page may carry only one, so the
         // confirmation is the browser's own, attached inline.
         const remove = row.removable
-            ? `<form method="POST" action="${escape(client.link("/tv/scrapers/delete"))}" style="display:inline" onsubmit="return confirm('Delete ${escape(row.name).replace(/'/g, "")} and its settings? This cannot be undone.')"><input type="hidden" name="id" value="${escape(row.id)}"><button class="step" type="submit">Delete</button></form>`
+            ? `<form method="POST" action="${escape(client.link("/tv/scrapers/delete"))}" class="inline" onsubmit="return confirm('Delete ${escape(row.name).replace(/'/g, "")} and its settings? This cannot be undone.')"><input type="hidden" name="id" value="${escape(row.id)}"><button class="step" type="submit">Delete</button></form>`
             : "";
         const gear = row.configurable
             ? `<a class="step" title="Settings" href="${escape(client.link(`/tv/scrapers/${encodeURIComponent(row.id)}/config`))}">${GEAR}</a>`
@@ -75,12 +75,12 @@ export function scrapersPage(client, signedIn, rows, githubSources = [], importN
         return `<li class="railrow">
 <span class="railname">${escape(`${source.owner}/${source.repo}`)}${source.hasToken ? ` <span class="railsay">token saved</span>` : ""}</span>
 <span class="railacts">
-<form method="POST" action="${escape(client.link("/tv/scrapers/github-recheck"))}" style="display:inline">
+<form method="POST" action="${escape(client.link("/tv/scrapers/github-recheck"))}" class="inline">
 <input type="hidden" name="owner" value="${escape(source.owner)}">
 <input type="hidden" name="repo" value="${escape(source.repo)}">
 <button class="step" type="submit">Check for updates</button>
 </form>
-<form method="POST" action="${escape(client.link("/tv/scrapers/github-forget"))}" style="display:inline">
+<form method="POST" action="${escape(client.link("/tv/scrapers/github-forget"))}" class="inline">
 <input type="hidden" name="owner" value="${escape(source.owner)}">
 <input type="hidden" name="repo" value="${escape(source.repo)}">
 <button class="step" type="submit">Forget</button>
@@ -161,7 +161,7 @@ ${field.help ? `<p class="hint">${escape(field.help)}</p>` : ""}`;
 <span class="railname">${escape(task.label)}</span>
 <span class="railsay">${escape(status)}</span>
 <span class="railacts">
-<form method="POST" action="${escape(client.link(`/tv/scrapers/${encodeURIComponent(row.id)}/tasks/${encodeURIComponent(task.id)}/run`))}" style="display:inline">
+<form method="POST" action="${escape(client.link(`/tv/scrapers/${encodeURIComponent(row.id)}/tasks/${encodeURIComponent(task.id)}/run`))}" class="inline">
 <button class="step" type="submit">Run now</button>
 </form>
 </span>
