@@ -67,7 +67,8 @@ assert.equal(match("Quest +1", "GB"), "300");
 assert.equal(match("Colors TV", "IN"), "401", "the country decides between same-named channels");
 assert.equal(match("Colors TV", "GB"), "400");
 assert.equal(match("Colors", ""), null, "no country, and the name exists in two: no match");
-assert.equal(match("Unique Planet", ""), "500", "no country, but unique worldwide");
+assert.equal(match("Unique Planet", ""), null, "no country: never matched, even when the name is unique");
+assert.equal(match("Unique Planet", "CA"), null, "and never across countries");
 assert.equal(match("Star Sports 1", "PK"), null, "a different country never matches");
 
 /* ---- the directory ---- */
@@ -195,5 +196,84 @@ store.stop();
 const saved = JSON.parse(readFileSync(join(dir, "epg-cache.json"), "utf8"));
 assert.equal(saved.recent.length, 50, "the warm set survives a restart");
 assert.ok(saved.directory.channels.length === 3, "and so does the directory");
+
+/* ---- the whole-guide fetch ---- */
+
+const { BulkGuide, mapChannels, parseProgramme, parseXmltvTime } = await import("../dist/epg-bulk.js");
+
+assert.equal(parseXmltvTime("20261001083000 +0530"), Date.parse("2026-10-01T03:00:00Z"), "an offset is honoured");
+assert.equal(parseXmltvTime("20261001030000 +0000"), Date.parse("2026-10-01T03:00:00Z"));
+assert.equal(parseXmltvTime("20260930230000 -0400"), Date.parse("2026-10-01T03:00:00Z"));
+
+assert.deepEqual(
+    parseProgramme(`<programme channel="7" start="20261001100000 +0000" stop="20261001110000 +0000"><title lang="en">Tom &amp; Jerry</title><desc>Chase.</desc></programme>`),
+    { channel: "7", programme: { start: Date.parse("2026-10-01T10:00:00Z"), stop: Date.parse("2026-10-01T11:00:00Z"), title: "Tom & Jerry", description: "Chase." } }
+);
+
+const mapped = mapChannels(
+    [
+        { id: "1", name: "Colors", country: "GB" },
+        { id: "2", name: "Colors", country: "IN" }
+    ],
+    [
+        { id: "uk", name: "Colors TV", country: "UK" },
+        { id: "in", name: "Colors", country: "IN" },
+        { id: "pk", name: "Colors", country: "PK" },
+        { id: "none", name: "Colors", country: "" }
+    ]
+);
+assert.deepEqual([...mapped.feeds.entries()], [["1", ["uk"]], ["2", ["in"]]], "each country its own guide; none across countries");
+assert.equal(mapped.status.matched, 2);
+assert.equal(mapped.status.unmatched, 2);
+assert.equal(mapped.status.noCountry, 1);
+assert.deepEqual(mapped.status.countries.find((c) => c.code === "PK"), { code: "PK", channels: 1, matched: 0 });
+
+{
+    const at = Date.parse("2026-10-01T12:00:00Z");
+    const guideXml = `<?xml version="1.0"?><tv>
+<channel id="1"><display-name lang="GB">Colors</display-name></channel>
+<channel id="2"><display-name lang="IN">Colors</display-name></channel>
+<programme channel="1" start="20261001113000 +0000" stop="20261001123000 +0000"><title>UK Show</title></programme>
+<programme channel="2" start="20261001170000 +0530" stop="20261001183000 +0530"><title>India Show</title></programme>
+<programme channel="2" start="20261005000000 +0000" stop="20261005010000 +0000"><title>Too far ahead</title></programme>
+</tv>`;
+    const bulkDir = mkdtempSync(join(tmpdir(), "epg-bulk-"));
+    const bulk = new BulkGuide({
+        file: join(bulkDir, "epg-guide.json"),
+        now: () => at,
+        fetcher: async () => ({
+            ok: true,
+            status: 200,
+            /* Small chunks, so a programme is split across reads. */
+            body: Readable.from(gzipChunks(guideXml)),
+            text: async () => ""
+        }),
+        channels: async () => [
+            { id: "uk", name: "Colors", country: "UK" },
+            { id: "in", name: "Colors", country: "IN" }
+        ]
+    });
+
+    await bulk.refresh();
+    assert.deepEqual(bulk.programmesFor("uk").map((p) => p.title), ["UK Show"]);
+    assert.deepEqual(bulk.programmesFor("in").map((p) => p.title), ["India Show"], "kept: only the window around now");
+    assert.equal(bulk.status().matched, 2);
+    assert.ok(bulk.status().ok);
+
+    const reread = new BulkGuide({ file: join(bulkDir, "epg-guide.json"), now: () => at, fetcher: async () => ({ ok: false, status: 500, body: null, text: async () => "" }), channels: async () => [] });
+    assert.deepEqual(reread.programmesFor("uk").map((p) => p.title), ["UK Show"], "schedules survive a restart");
+    await reread.refresh();
+    assert.equal(reread.status().ok, false, "a failed fetch is reported");
+    assert.deepEqual(reread.programmesFor("uk").map((p) => p.title), ["UK Show"], "and keeps the schedules already held");
+}
+
+function gzipChunks(text) {
+    const zipped = gzipSync(Buffer.from(text));
+    const out = [];
+
+    for (let at = 0; at < zipped.length; at += 37) out.push(zipped.subarray(at, at + 37));
+
+    return out;
+}
 
 console.log("epg: ok");

@@ -71,7 +71,10 @@ import { startScraperScheduler, stopScraperScheduler } from "./scraper-scheduler
 import { lastTaskRun, runScraperTask } from "./scraper-tasks.js";
 import { scheduleSweep, stopSweep, sweep, sweepState } from "./sweep.js";
 import { liveFetch, registerStream } from "./relay.js";
-import { GuideStore, nowLine } from "./epg.js";
+import { GuideStore, defaultFetcher, nowLine } from "./epg.js";
+import { BulkGuide } from "./epg-bulk.js";
+import { zoneForCountry } from "./timezones.js";
+import { existsSync as fileExists, readFileSync as readFile, writeFileSync as writeFile } from "node:fs";
 import { pluginConfig } from "./plugin-config.js";
 
 import { PLUGIN_API_VERSION } from "./plugin-types.js";
@@ -161,11 +164,44 @@ const createPlugin: PluginFactory = (host, configDir) => {
     startScraperScheduler();
 
     /*
-        THE PROGRAMME GUIDE. Fetched per channel when one is opened or
-        played, cached until its timeline runs out or it is 12 hours old,
-        and the last 50 channels kept warm every 12 hours -- see `epg.ts`.
-        Stopped by `dispose()` like every other timer here.
+        THE PROGRAMME GUIDE.
+
+        The whole guide is fetched every 12 hours and matched to every
+        channel in the index (`epg-bulk.ts`), so any channel page has its
+        schedule. Per-channel fetching (`epg.ts`'s `GuideStore`: on open,
+        cached until the timeline ends or 12 hours, last 50 kept warm) is
+        still here for a channel the bulk run did not cover, but OFF by
+        default -- a switch on the Sources page. Both stopped by
+        `dispose()` like every other timer here.
     */
+    const guideSettingsFile = pluginConfig.epgSettings;
+    const readGuideSettings = (): { dynamic: boolean } => {
+        try {
+            if (guideSettingsFile && fileExists(guideSettingsFile)) {
+                return { dynamic: (JSON.parse(readFile(guideSettingsFile, "utf8")) as { dynamic?: unknown }).dynamic === true };
+            }
+        } catch {
+            /* A broken settings file is the default: off. */
+        }
+
+        return { dynamic: false };
+    };
+    let guideSettings = readGuideSettings();
+
+    const bulk = new BulkGuide({
+        file: pluginConfig.epgGuide,
+        overridesFile: pluginConfig.epgOverrides,
+        fetcher: defaultFetcher,
+        channels: async () => {
+            const built = await channelIndex();
+
+            return built ? [...built.byId.values()].map((channel) => ({ id: channel.id, name: channel.name, country: channel.country })) : [];
+        },
+        log: (line) => console.log(line)
+    });
+
+    bulk.start();
+
     const guide = new GuideStore({
         file: pluginConfig.epgStore,
         overridesFile: pluginConfig.epgOverrides,
@@ -177,7 +213,30 @@ const createPlugin: PluginFactory = (host, configDir) => {
         log: (line) => console.log(line)
     });
 
-    guide.startWarming();
+    if (guideSettings.dynamic) guide.startWarming();
+
+    /** A channel's schedule: the bulk guide first, then -- only when the
+     *  switch is on -- a per-channel fetch. `wait` false never fetches. */
+    async function scheduleFor(channelId: string, wait: boolean): Promise<import("./plugin-types.js").Programme[] | null> {
+        const fromBulk = bulk.programmesFor(channelId);
+
+        if (fromBulk || !guideSettings.dynamic) return fromBulk;
+
+        return wait ? guide.programmesFor(channelId).catch(() => null) : guide.peek(channelId);
+    }
+
+    function setDynamicGuide(on: boolean): void {
+        guideSettings = { dynamic: on };
+
+        try {
+            if (guideSettingsFile) writeFile(guideSettingsFile, JSON.stringify(guideSettings));
+        } catch (error) {
+            console.log(`[epg] could not save the guide setting: ${(error as Error).message}`);
+        }
+
+        if (on) guide.startWarming(5_000);
+        else guide.stop();
+    }
 
     async function sendScrapersPage(client: PluginRouteContext["client"], signedIn: boolean, session: unknown, note: { text: string; ok: boolean } | null) {
         const all = allScrapers();
@@ -194,7 +253,14 @@ const createPlugin: PluginFactory = (host, configDir) => {
         const githubSources: GithubSourceRow[] = listGithubSources();
         const capability = await host.requestVpnCapability("live-tv", session);
 
-        return html(scrapersPage(client, signedIn, rows, githubSources, note, capability.status));
+        return html(
+            scrapersPage(client, signedIn, rows, githubSources, note, capability.status, {
+                status: bulk.status(),
+                running: bulk.isRunning(),
+                dynamic: guideSettings.dynamic,
+                warm: guideSettings.dynamic ? guide.recentChannels().length : 0
+            })
+        );
     }
 
     async function sendScraperConfigPage(client: PluginRouteContext["client"], signedIn: boolean, scraperId: string, note: { text: string; ok: boolean } | null) {
@@ -304,6 +370,16 @@ const createPlugin: PluginFactory = (host, configDir) => {
                 }
 
                 return html(railsPage(ctx.client, signedIn, slots, prefs, !gone));
+            }
+        },
+        {
+            method: "POST",
+            path: "/tv/scrapers/guide",
+            async handle(ctx) {
+                if (ctx.form.get("refresh")) void bulk.refresh().catch(() => undefined);
+                if (ctx.form.get("dynamic")) setDynamicGuide(ctx.form.get("dynamic") === "on");
+
+                return redirect(ctx.client, "/tv/scrapers");
             }
         },
         {
@@ -649,7 +725,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.9.0",
+        version: "1.10.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
@@ -658,6 +734,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
             stopSweep();
             flushChecks();
             guide.stop();
+            bulk.stop();
         },
         routes: () => routes,
         ownsContentId: (type, id) => type === "tv" && isChannelId(id),
@@ -675,12 +752,31 @@ const createPlugin: PluginFactory = (host, configDir) => {
                 too. A schedule not cached yet is fetched in the
                 background and is on the page the next time it opens.
             */
-            const programmes = guide.peek(channel.id);
+            const programmes = await scheduleFor(channel.id, false);
             const line = programmes ? nowLine(programmes) : "";
+
+            const zone = zoneForCountry(channel.country);
 
             return {
                 ...meta,
-                description: line ? `${line}\n${meta.description || ""}`.trim() : meta.description
+                description: line ? `${line}\n${meta.description || ""}`.trim() : meta.description,
+                /*
+                    The full schedule, for core's title page (plugin API
+                    1.4.0; an older core ignores it). Times are instants;
+                    the page writes them in the television's zone, and in
+                    the channel's own (`timeZone`) beside it.
+                */
+                schedule: programmes && programmes.length
+                    ? {
+                          programmes,
+                          timeZone: zone,
+                          /* "UK time", not "United Kingdom of Great Britain... time". */
+                          zoneLabel:
+                              (channel.countryName || "").length <= 10 && channel.countryName
+                                  ? channel.countryName
+                                  : channel.country
+                      }
+                    : undefined
             } as unknown as Record<string, unknown>;
         },
         /*
@@ -697,10 +793,13 @@ const createPlugin: PluginFactory = (host, configDir) => {
 
             if (!channel) return null;
 
-            const programmes = (await guide.programmesFor(channel.id).catch(() => null)) || [];
-            const ahead = Date.now() + 24 * 3_600_000;
+            if (guideSettings.dynamic) guide.remember(channel.id);
+
+            const programmes = (await scheduleFor(channel.id, true)) || [];
+            const now = Date.now();
+            const ahead = now + 12 * 3_600_000;
             const items = programmes
-                .filter((programme) => programme.start < ahead)
+                .filter((programme) => programme.stop > now && programme.start < ahead)
                 .map((programme) => ({
                     label: programme.title,
                     note: programme.description ? programme.description.slice(0, 160) : undefined,
@@ -711,7 +810,17 @@ const createPlugin: PluginFactory = (host, configDir) => {
             return {
                 chips: regionChips(channel),
                 buttons: items.length
-                    ? [{ id: "programs", label: "Programs", heading: "Programs", icon: PROGRAMS_ICON, items }]
+                    ? [
+                          {
+                              id: "programs",
+                              label: "Programs",
+                              /* The sidebar's heading: the channel, with its logo (API 1.4.0). */
+                              heading: channel.name,
+                              logo: channel.logo || undefined,
+                              icon: PROGRAMS_ICON,
+                              items
+                          }
+                      ]
                     : []
             };
         },

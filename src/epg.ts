@@ -32,13 +32,12 @@
  * MATCHING, AND WHY SIMILAR NAMES STAY APART
  * ------------------------------------------
  * A channel is matched to a guide entry only on an EXACT normalized name in
- * the SAME country (see `epgKey`). Normalizing removes spelling noise only
+ * the SAME country, never across countries (see `epgKey`). Normalizing removes spelling noise only
  * ("SkyDramaHD" = "Sky Drama HD", "BBC 1" = "BBC One", "Colors TV" =
  * "Colors") and deliberately keeps every word that tells two channels
  * apart: "Star Sports 1" never matches "Star Sports 1 Hindi", "Sky Cinema"
  * never matches "Sky Cinema Action", "Quest" never matches "Quest +1". A
- * channel with no country matches only a name that is unique across the
- * whole directory. No match means no guide -- a wrong guide is worse than
+ * channel with no country is never matched. No match means no guide -- a wrong guide is worse than
  * none. `<configDir>/epg-overrides.json` (`{"<channel id>": "<epg.pw id>"
  * | null}`) pins or blocks any channel by hand.
  */
@@ -193,16 +192,12 @@ export function matchChannel(index: GuideIndex, subject: GuideSubject): GuideCha
     if (!key) return null;
 
     const country = countryCode(subject.country);
-    let candidates: GuideChannel[];
+    /* STRICTLY the same country. A channel with no country is never
+       matched: a name alone is exactly how "Colors" (UK) would end up
+       showing "Colors" (India)'s schedule. */
+    if (!/^[A-Z]{2}$/.test(country)) return null;
 
-    if (country) {
-        candidates = index.byCountry.get(country)?.get(key) || [];
-    } else {
-        const everywhere = index.byKey.get(key) || [];
-        const countries = new Set(everywhere.map((channel) => countryCode(channel.country)));
-
-        candidates = countries.size === 1 ? everywhere : [];
-    }
+    const candidates = index.byCountry.get(country)?.get(key) || [];
 
     if (!candidates.length) return null;
 
@@ -354,11 +349,11 @@ export function nowLine(programmes: Programme[], now = Date.now()): string {
 /* The store                                                           */
 /* ------------------------------------------------------------------ */
 
-export type Fetcher = (url: string) => Promise<{ ok: boolean; status: number; body: Readable | null; text(): Promise<string> }>;
+export type Fetcher = (url: string, timeoutMs?: number) => Promise<{ ok: boolean; status: number; body: Readable | null; text(): Promise<string> }>;
 
-const defaultFetcher: Fetcher = async (url) => {
+export const defaultFetcher: Fetcher = async (url, timeoutMs = REQUEST_TIMEOUT) => {
     const answer = await fetch(url, {
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT),
+        signal: AbortSignal.timeout(timeoutMs),
         headers: { accept: "application/json, application/xml;q=0.9, */*;q=0.1" }
     });
 
