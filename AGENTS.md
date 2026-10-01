@@ -101,22 +101,29 @@ scraper really exports that decoder AND `host.pluginApiVersion` is at
 least 1.2.0 (`relay-support.ts`): offered anywhere else, it would hand a
 player a picture instead of video. `test/relay.mjs` covers all of this.
 
-## The programme guide (`epg.ts`)
+## The programme guide (`epg-bulk.ts`, `epg.ts`)
 
-Schedules come from epg.pw's per-channel JSON API, fetched when a channel
-is opened or played and cached until its timeline ends or it is 12 hours
-old; the last 50 channels opened or played are refreshed every 12 hours
-(`GuideStore.startWarming`, stopped in `dispose()`). The channel directory
-is the head of epg.pw's XMLTV file, re-read weekly. Matching is exact
-normalized name within the same country -- loosening it is how look-alike
-channels ("Star Sports 1" / "Star Sports 1 Hindi") start sharing a guide;
-`<configDir>/epg-overrides.json` pins or blocks a channel instead. Every
-time is an epoch instant; only relative text ("35 min left") is written
-here, never a clock time. The guide reaches people two ways: a "Now / Next"
-line in `metaFor`'s description (from the cache only -- core calls
-`metaFor` on Play too, so it never waits), and, from core plugin API 1.3.0,
-`playerExtras`: a Programs button at the right end of the player's control
-bar (shown only when there is a schedule; core formats every time on the
-television in its own zone) plus the country and language chips that lead
-the player's chip row. The same chips go on every channel card
-(`render.ts`'s `chanCard`, via `regionChips`).
+The WHOLE guide (epg.pw's XMLTV, ~50 MB gzipped) is streamed every 12
+hours by `BulkGuide` and matched to every channel in the index; each
+matched channel keeps 12 hours back to 36 ahead in
+`<configDir>/epg-guide.json`. Matching is exact normalized name within the
+SAME country only -- never across countries, and a channel with no
+country is never matched; loosening this is how look-alike channels
+("Star Sports 1" / "Star Sports 1 Hindi", "Colors" UK / India) start
+sharing a guide. `<configDir>/epg-overrides.json` pins or blocks a channel
+by hand. The run's status and per-country match counts are on the Sources
+page.
+
+Per-channel fetching (`GuideStore` in `epg.ts`: fetch on open/play, cache
+until the timeline ends or 12 hours, last 50 kept warm) is still there for
+channels the bulk run missed, but OFF by default -- a switch on the Sources
+page, saved in `<configDir>/epg-settings.json`.
+
+Every time is an epoch instant; this repo writes only relative text ("35
+min left"), never a clock time. Core (plugin API 1.4.0) draws the rest:
+`metaFor`'s `schedule` becomes the title page's timetable (row height
+proportional to duration; the TV's time and the channel's zone from
+`timezones.ts`), and `playerExtras` gives the player its region chips and
+a Programs button that opens a sidebar headed by the channel's logo and
+name, listing the next 12 hours. `metaFor` never waits on the network --
+core calls it on Play too. `dispose()` stops both timers.
