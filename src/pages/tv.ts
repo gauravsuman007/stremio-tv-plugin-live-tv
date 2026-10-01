@@ -45,7 +45,22 @@ function countryCard(client: Client, country: Country): string {
 </a></span>`;
 }
 
-function chanShelf(client: Client, heading: string, by: string, channels: Channel[], more?: string): string {
+/*
+    WHICH LOGOS WAIT. The same rule core's Home uses for posters: the first
+    two rails on screen load whole, and every rail loads its first seven
+    cards at once; the rest name their logo in "data-src" and core's shared
+    script swaps it in as the rail scrolls near. A dozen rails of fourteen
+    logos is a hundred and fifty images a 2016 panel would otherwise decode
+    before the page answered the remote.
+*/
+const EAGER_RAILS = 2;
+const EAGER_CARDS = 7;
+
+function lazyAt(position: number, index: number): boolean {
+    return position >= EAGER_RAILS && index >= EAGER_CARDS;
+}
+
+function chanShelf(client: Client, heading: string, by: string, channels: Channel[], more: string | undefined, position: number): string {
     if (channels.length === 0) return "";
 
     const link = more
@@ -55,7 +70,7 @@ function chanShelf(client: Client, heading: string, by: string, channels: Channe
     return `<section class="shelf">
 <h2>${escape(heading)}${link}</h2>
 <div class="strip">
-${channels.map((channel) => chanCard(client, { ...channel, note: describeChannel(channel) })).join("\n")}
+${channels.map((channel, index) => chanCard(client, { ...channel, note: describeChannel(channel) }, false, lazyAt(position, index))).join("\n")}
 </div>
 </section>`;
 }
@@ -154,20 +169,20 @@ export function livePage(
         a favourite's sources are followed all the way to video overnight,
         which no other channel's are.
     */
-    const kept = favourites.length
+    const kept = (position: number): string => favourites.length
         ? `<section class="shelf">
 <h2>Favourites <span class="by">Checked in depth every night</span></h2>
 <div class="strip">
-${favourites.map((entry) => chanCard(client, entry)).join("\n")}
+${favourites.map((entry, index) => chanCard(client, entry, false, lazyAt(position, index))).join("\n")}
 </div>
 </section>`
         : "";
 
-    const watched = recent.length
+    const watched = (position: number): string => recent.length
         ? `<section class="shelf">
 <h2>Recently watched <span class="by">This household</span></h2>
 <div class="strip">
-${recent.map((entry) => chanCard(client, entry, true)).join("\n")}
+${recent.map((entry, index) => chanCard(client, entry, true, lazyAt(position, index))).join("\n")}
 </div>
 </section>`
         : "";
@@ -189,17 +204,34 @@ ${countries.map((country) => countryCard(client, country)).join("\n")}
         -- a page that can hide Sports but not "Recently watched" is a
         page that half-answers the request.
     */
-    const drawn = new Map<string, string>([
+    const drawn = new Map<string, (position: number) => string>([
         ["fav", kept],
         ["recent", watched],
-        ["places", places],
+        ["places", () => places],
         ...rows.map(
-            (row) => [row.id, chanShelf(client, row.heading, row.by, row.channels, row.more)] as [string, string]
+            (row) =>
+                [row.id, (position: number) => chanShelf(client, row.heading, row.by, row.channels, row.more, position)] as [
+                    string,
+                    (position: number) => string
+                ]
         )
     ]);
 
     const natural = ["fav", "recent", ...rows.map((row) => row.id), "places"];
-    const rails = (show.length ? show : natural).map((id) => drawn.get(id) || "").join("\n");
+    /*
+        Positions count only rails that actually draw, so an empty
+        Favourites does not push the first real rail into the lazy zone.
+    */
+    let position = 0;
+    const rails = (show.length ? show : natural)
+        .map((id) => {
+            const html = drawn.get(id)?.(position) || "";
+
+            if (html) position += 1;
+
+            return html;
+        })
+        .join("\n");
 
     return page({
         title: "Live TV",
@@ -272,7 +304,7 @@ export function channelSearchPage(
           }</p>`
         : channels.length
           ? `<div class="wall">
-${channels.map((channel) => chanCard(client, { ...channel, note: describeChannel(channel) })).join("\n")}
+${channels.map((channel, index) => chanCard(client, { ...channel, note: describeChannel(channel) }, false, index >= 8)).join("\n")}
 </div>`
           : `<p class="empty">No channel called &ldquo;${escape(query)}&rdquo;.</p>`;
 

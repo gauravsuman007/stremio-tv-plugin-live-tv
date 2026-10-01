@@ -133,6 +133,34 @@ const tamil = browsePage(client, false, {
 ok(tamil.includes("Puthiya Thalaimurai") && tamil.includes("Polimer News") && !tamil.includes("Aaj Tak"), "picking Tamil shows Tamil news only");
 ok(!tamil.includes("Region"), "a country's own page has no region row");
 
+/* ---- inherited skin ------------------------------------------------------ */
+
+testHost.pluginApiVersion = "1.2.0";
+const skinned = browsePage(client, false, {
+    scope: { country: "", title: "All", flag: "", path: "/tv/browse", regionChips: true },
+    regions: [],
+    channels: await channelsIn("IN"),
+    genre: "",
+    language: "",
+    skip: 0,
+    perPage: 60,
+    status: null,
+    languageName: (code) => code
+});
+ok(!skinned.includes("<style"), "on a core with the plugin kit, Browse brings no stylesheet of its own");
+ok(skinned.includes('class="sidenav"') && skinned.includes('class="chiprow"'), "it is built from core's kit classes instead");
+ok(!/style="/.test(skinned), "and no inline styles");
+ok((skinned.match(/data-src=/g) || []).length > 0 && /<img src=/.test(skinned), "the first cards load at once, later ones wait for the screen");
+delete testHost.pluginApiVersion;
+ok(browsePage(client, false, { scope: { country: "", title: "All", flag: "", path: "/tv/browse", regionChips: true }, regions: [], channels: [], genre: "", language: "", skip: 0, perPage: 60, status: null, languageName: (c) => c }).includes("<style"), "on an older core the kit's rules are brought along");
+
+/* ---- the channel's title page facts ---------------------------------------- */
+
+const { channelMeta } = await import("../dist/channels.js");
+const sunMeta = channelMeta(byName("Sun News"));
+ok(JSON.stringify(sunMeta.genres) === JSON.stringify(["News", "Tamil"]), "a channel's pills name its genre and language in words");
+ok(sunMeta.releaseInfo === "🇮🇳 India", "and its country, with the flag, where a film has its year");
+
 /* ---- World TV ------------------------------------------------------------- */
 
 const world = worldPage(client, false, await countries(), ["IN", "US"], null);

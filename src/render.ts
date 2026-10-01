@@ -18,8 +18,9 @@ export const page = (options: PageOptions): string => host.render.page(options);
 export const chanCard = (
     client: Client,
     channel: { id: string; name: string; logo: string; note?: string },
-    direct?: boolean
-): string => host.render.chanCard(client, channel, direct);
+    direct?: boolean,
+    lazy?: boolean
+): string => host.render.chanCard(client, channel, direct, lazy);
 export const chrome = (client: Client, current: Tab, signedIn: boolean): string =>
     host.render.chrome(client, current, signedIn);
 export const art = (client: Client, url: string | undefined): string => host.render.art(client, url);

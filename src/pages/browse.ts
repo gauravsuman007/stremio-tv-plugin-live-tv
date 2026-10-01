@@ -30,6 +30,7 @@
  */
 
 import { chanCard, chrome, escape, page, vpnBadge, vpnSheet } from "../render.js";
+import { relayAvailable } from "../relay-support.js";
 import { describeChannel } from "../channels.js";
 import { CONTINENT_LABELS, GENRES, continentOf, genreLabel, genreOf, languageLabel, languagesOf } from "../taxonomy.js";
 
@@ -51,26 +52,37 @@ export function liveNav(client: Client, current: LiveTab): string {
     return `<p class="bar">${tab("home", "/tv", "For you")}${tab("browse", "/tv/browse", "Browse")}${tab("world", "/tv/world", "&#127757; World TV")}${tab("search", "/tv/search", "&#9906; Search")}<a class="step" href="${escape(client.link("/tv/rails"))}">&#9776; Arrange</a><a class="step" href="${escape(client.link("/tv/scrapers"))}">Sources</a></p>`;
 }
 
-/** Everything these pages add to core's stylesheet. Kept small, and kept
- *  to what Chromium 53 understands. */
-const STYLE = `<style>
-.lt-chips { margin: 0 0 .4em 0; }
-.lt-chips .lab { display: inline-block; min-width: 8em; font-size: .7em; font-weight: 700; color: #808080; text-transform: uppercase; letter-spacing: .08em; }
-.lt-chips .step { padding: .45em 1.1em; font-size: .8em; }
-.lt-chips .step .n, .lt-side .n { font-weight: 400; opacity: .7; margin-left: .45em; }
-.lt-body { overflow: hidden; margin-top: 1em; }
-.lt-side { float: left; width: 13.5em; margin: 0 1.6em 1em 0; }
-.lt-side a { display: block; padding: .5em .9em; margin: 0 0 .2em 0; border-radius: 4px; color: #b3b3b3; font-size: .88em; font-weight: 700; }
-.lt-side a.on { background: #ffffff; color: #141414; }
-.lt-side a.off { opacity: .35; }
-.lt-side .n { float: right; }
-.lt-main { overflow: hidden; }
-.lt-main .wall .chan { width: 23%; margin-right: 2%; }
-.lt-cont { margin: 1.6em 0 .6em 0; font-size: 1.05em; }
-.lt-cont .by { font-size: .62em; color: #808080; font-weight: 600; margin-left: .8em; }
-.lt-world .flagcard { width: 15.5%; }
-.lt-stat { color: #b3b3b3; margin: 0 0 1em 0; }
+/*
+    NO STYLESHEET OF OUR OWN. These pages are built from core's skin and
+    its plugin kit (`.chiprow`, `.sidenav`/`.sidemain`, `.step .n` -- see
+    core's `html.ts` and `docs/plugin-template.ts`), so a change to the
+    palette, the type scale or the focus treatment there reaches them with
+    nothing to copy.
+
+    The one exception is a core older than plugin API 1.2.0, which has no
+    kit: there, and only there, these few rules stand in for it, so a
+    plugin updated before its host is not drawn unstyled.
+*/
+const KIT_FALLBACK = `<style>
+.chiprow { margin: 0 0 .4em 0; }
+.chiprow .lab { display: inline-block; min-width: 8em; font-size: .62em; font-weight: 700; color: #808080; text-transform: uppercase; }
+.step .n { font-weight: 400; opacity: .7; margin-left: .45em; }
+.sidenav { float: left; width: 13.5em; margin: 0 1.6em 1em 0; }
+.sidenav a { display: block; padding: .5em .9em; margin: 0 0 .2em 0; border-radius: 4px; color: #b3b3b3; font-size: .88em; font-weight: 700; }
+.sidenav a.on { background: #ffffff; color: #141414; }
+.sidenav a.off { opacity: .35; }
+.sidenav .n { float: right; }
+.sidemain { overflow: hidden; }
+.sidemain .wall .chan { width: 23%; margin-right: 2%; }
 </style>`;
+
+function kit(): string {
+    return relayAvailable() ? "" : KIT_FALLBACK;
+}
+
+/** Cards past the first two rows of a wall load as they near the screen
+ *  (core's shared script), the way Home defers its posters. */
+const EAGER = 8;
 
 function routing(client: Client, status: VpnStatus | null, back: string): string {
     const panel = vpnSheet(status, client.link("/vpn"), back);
@@ -164,7 +176,7 @@ export function browsePage(client: Client, signedIn: boolean, input: BrowseInput
         because "Tamil" in the United Kingdom is an empty page.
     */
     const regionRow = scope.regionChips
-        ? `<p class="lt-chips"><span class="lab">Region</span>${input.regions
+        ? `<p class="chiprow"><span class="lab">Region</span>${input.regions
               .map((region) => chip(link({ c: region.code, g: "", l: "" }), `${escape(region.flag)} ${escape(region.name)}`, region.code === scope.country))
               .join("")}${chip(link({ c: "", g: "", l: "" }), "All countries", !scope.country)}${chip(client.link("/tv/world"), "More countries &rsaquo;", false)}</p>`
         : "";
@@ -176,12 +188,12 @@ export function browsePage(client: Client, signedIn: boolean, input: BrowseInput
     */
     const languageRow =
         languages.length >= 2
-            ? `<p class="lt-chips"><span class="lab">Language</span>${chip(link({ l: "" }), "All", !language)}${languages
+            ? `<p class="chiprow"><span class="lab">Language</span>${chip(link({ l: "" }), "All", !language)}${languages
                   .map(([code, count]) => chip(link({ l: code }), escape(languageLabel(code, input.languageName)), code === language, count))
                   .join("")}</p>`
             : "";
 
-    const side = `<nav class="lt-side">${[
+    const side = `<nav class="sidenav">${[
         `<a class="${genre ? "" : "on"}" href="${escape(link({ g: "", l: "" }))}">All genres<span class="n">${browsable.length.toLocaleString("en")}</span></a>`,
         ...GENRES.map((entry) => {
             const count = genreCounts.get(entry.id) || 0;
@@ -210,7 +222,7 @@ export function browsePage(client: Client, signedIn: boolean, input: BrowseInput
               `${input.skip + 1}-${input.skip + slice.length} of ${shown.length.toLocaleString("en")}${what ? ` (${what})` : ""}, channels that played at the last check first`
           )}</p>
 <div class="wall">
-${slice.map((channel) => chanCard(client, { ...channel, note: describeChannel(channel) })).join("\n")}
+${slice.map((channel, at) => chanCard(client, { ...channel, note: describeChannel(channel) }, false, at >= EAGER)).join("\n")}
 </div>
 ${pager}`
         : `<p class="empty">Nothing here yet${what ? ` for ${escape(what)}` : ""}. Try another genre, or All.</p>`;
@@ -218,7 +230,7 @@ ${pager}`
     return page({
         title: `Live TV: ${scope.title}`,
         body: `${chrome(client, "live", signedIn)}
-${STYLE}
+${kit()}
 <div class="tvhead">
 <h1>${scope.flag ? `<span class="flag">${escape(scope.flag)}</span> ` : ""}${escape(scope.title)}</h1>
 ${liveNav(client, scope.regionChips ? "browse" : "world")}
@@ -226,9 +238,9 @@ ${liveNav(client, scope.regionChips ? "browse" : "world")}
 ${routing(client, input.status, scope.path)}
 ${regionRow}
 ${languageRow}
-<div class="lt-body">
+<div>
 ${side}
-<div class="lt-main">
+<div class="sidemain">
 ${main}
 </div>
 </div>`
@@ -266,28 +278,30 @@ export function worldPage(client: Client, signedIn: boolean, countries: Country[
 
     const order = ["asia", "europe", "north-america", "latin-america", "africa", "oceania", "elsewhere"].filter((id) => byContinent.has(id));
 
-    const jump = `<p class="lt-chips"><span class="lab">Jump to</span>${order
+    const jump = `<p class="chiprow"><span class="lab">Jump to</span>${order
         .map((id) => `<a class="step" href="#lt-${id}">${escape(CONTINENT_LABELS[id] || id)}<span class="n">${(byContinent.get(id) || []).length}</span></a>`)
         .join("")}</p>`;
 
     const section = (id: string, heading: string, by: string, list: Country[]): string =>
         list.length
-            ? `<h2 class="lt-cont" id="lt-${escape(id)}">${escape(heading)} <span class="by">${escape(by)}</span></h2>
-<div class="wall lt-world">
+            ? `<section class="shelf" id="lt-${escape(id)}">
+<h2>${escape(heading)} <span class="by">${escape(by)}</span></h2>
+<div class="wall">
 ${list.map((country) => countryTile(client, country)).join("\n")}
-</div>`
+</div>
+</section>`
             : "";
 
     return page({
         title: "Live TV: World TV",
         body: `${chrome(client, "live", signedIn)}
-${STYLE}
+${kit()}
 <div class="tvhead">
 <h1>&#127757; World TV</h1>
 ${liveNav(client, "world")}
 </div>
 ${routing(client, status, "/tv/world")}
-<p class="lt-stat">${escape(`${total.toLocaleString("en")} channels from ${countries.length} countries.`)}</p>
+<p class="lead">${escape(`${total.toLocaleString("en")} channels from ${countries.length} countries.`)}</p>
 ${jump}
 ${section("home", "Your countries", "Set for this household", mine)}
 ${order

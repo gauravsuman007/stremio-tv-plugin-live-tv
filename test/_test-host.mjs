@@ -86,8 +86,8 @@ export const testHost = {
         page: ({ body }) => body,
         chrome: () => "",
         art: (_client, url) => url || "",
-        chanCard: (client, channel) =>
-            `<span class="card chan"><a href="${escape(client.link(`/detail/tv/${encodeURIComponent(channel.id)}`))}">${escape(channel.name)}</a></span>`,
+        chanCard: (client, channel, _direct, lazy) =>
+            `<span class="card chan"><a href="${escape(client.link(`/detail/tv/${encodeURIComponent(channel.id)}`))}"><img ${lazy ? "data-src" : "src"}="${escape(channel.logo || "x")}">${escape(channel.name)}</a></span>`,
         failureNote: () => "",
         KEYS: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".split("")
     }

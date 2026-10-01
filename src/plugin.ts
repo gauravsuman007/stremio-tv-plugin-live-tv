@@ -85,19 +85,21 @@ function redirect(client: PluginRouteContext["client"], to: string) {
     return { status: 303, headers: { location: client.link(to) }, body: "" };
 }
 
-function bareNote(heading: string, detail: string): string {
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escape(heading)}</title>
-</head>
-<body style="font-family: sans-serif; margin: 2em; line-height: 1.5">
-<h1 style="font-size: 1.3em">${escape(heading)}</h1>
-<p>${escape(detail)}</p>
-</body>
-</html>`;
+/**
+ * A short "not here" page, in the surface's own skin -- core's page shell
+ * and menu row, so it looks like every other page and the remote's Back
+ * key works on it (a hand-built page had neither).
+ */
+function bareNote(client: PluginRouteContext["client"], heading: string, detail: string): string {
+    const signedIn = Boolean((client.session as { authKey?: string } | undefined)?.authKey);
+
+    return page({
+        title: heading,
+        body: `${chrome(client, "live", signedIn)}
+<div class="tvhead"><h1>${escape(heading)}</h1></div>
+<p class="lead">${escape(detail)}</p>
+<p class="bar"><a class="go" href="${escape(client.link("/tv/scrapers"))}">&lsaquo; Sources</a></p>`
+    });
 }
 
 function liveSlots(
@@ -387,7 +389,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
                 const signedIn = Boolean((ctx.client.session as { authKey?: string } | undefined)?.authKey);
                 const found = await sendScraperConfigPage(ctx.client, signedIn, ctx.params.id as string, null);
 
-                return found || html(bareNote("No such source.", "It may have been removed or renamed."), 404);
+                return found || html(bareNote(ctx.client, "No such source.", "It may have been removed or renamed."), 404);
             }
         },
         {
@@ -398,7 +400,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
                 const scraperId = ctx.params.id as string;
                 const scraper = allScrapers().find((s) => s.id === scraperId);
 
-                if (!scraper) return html(bareNote("No such source.", "It may have been removed or renamed."), 404);
+                if (!scraper) return html(bareNote(ctx.client, "No such source.", "It may have been removed or renamed."), 404);
 
                 const values: Record<string, string | number | boolean> = {};
 
@@ -432,7 +434,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
                 const taskId = ctx.params.taskId as string;
                 const scraper = allScrapers().find((s) => s.id === scraperId);
 
-                if (!scraper) return html(bareNote("No such source.", "It may have been removed or renamed."), 404);
+                if (!scraper) return html(bareNote(ctx.client, "No such source.", "It may have been removed or renamed."), 404);
 
                 try {
                     await runScraperTask(scraper, taskId, getScraperConfig(scraper));
@@ -454,7 +456,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
                 const scraperId = ctx.params.id as string;
 
                 if (!allScrapers().some((s) => s.id === scraperId)) {
-                    return html(bareNote("No such source.", "It may have been removed or renamed."), 404);
+                    return html(bareNote(ctx.client, "No such source.", "It may have been removed or renamed."), 404);
                 }
 
                 // Fire and forget, same as the nightly sweep's own manual
@@ -621,7 +623,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.6.0",
+        version: "1.7.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
