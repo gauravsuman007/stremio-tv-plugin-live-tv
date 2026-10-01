@@ -19,9 +19,51 @@ export interface ScrapedStream {
     quality: string;
     /** Short warnings such as "Geo-blocked" or "Not 24/7". */
     labels: string[];
+    /** Sent as `Referer` on EVERY request this stream makes -- the
+     *  playlist, each variant, each segment and key -- because the Live TV
+     *  plugin relays all of them. "" when the CDN does not care. */
     referrer: string;
+    /** Sent as `User-Agent` on every request, same as `referrer`. "" for
+     *  the relay's default (a VLC string, which most IPTV CDNs accept). */
     userAgent: string;
+    /**
+     * OPTIONAL. The name of an entry in this same scraper's `decoders`
+     * (see `Scraper.decoders`) that every SEGMENT of this stream must pass
+     * through before a player can read it. Leave it out for an ordinary
+     * stream -- which is nearly all of them.
+     *
+     * For a CDN that serves its video in disguise: dlhd's segments are real
+     * PNG images with the MPEG-TS steganographically packed into their
+     * pixels, so a player fetching one directly finds a picture and no
+     * video. The plugin relays the stream, recognises each segment as this
+     * stream's (playlists are read as they pass, and every URI in them is
+     * remembered), and hands the bytes to your decoder on the way through.
+     * Playlists themselves are never decoded.
+     *
+     * Kept as a NAME rather than the function itself because a scraper's
+     * catalogue is stored as JSON between runs; the function is looked up
+     * on the loaded scraper at play time. A name with no matching decoder,
+     * or a running stremio-tv too old to let the plugin relay segments
+     * (plugin API below 1.2.0), drops the stream rather than handing a
+     * player something it cannot play.
+     */
+    decoder?: string;
 }
+
+/**
+ * Turns one segment, exactly as the CDN served it, into what a player
+ * expects -- normally MPEG-TS, whose 188-byte packets each begin `0x47`.
+ * `url` is the segment's own address, for a decoder whose scheme depends
+ * on it. Throw if the bytes are not what you expected: the relay then
+ * answers that one segment with an error, and the player moves on, the
+ * same as a segment that failed to download.
+ *
+ * Runs on the server for every segment of every viewer, so keep it to
+ * pure computation over the bytes: no network, no state between calls,
+ * nothing that grows. `node:zlib` and `node:crypto` are the tools for the
+ * jobs this usually takes (an inflate, a gunzip, an AES block).
+ */
+export type SegmentDecoder = (segment: Uint8Array, url: string) => Uint8Array | Promise<Uint8Array>;
 
 export interface ScrapedChannel {
     /**
@@ -207,6 +249,12 @@ export interface Scraper {
     configSchema?: ScraperConfigField[];
     /** OPTIONAL. See `ScraperTask`. */
     tasks?: ScraperTask[];
+    /**
+     * OPTIONAL. Named segment decoders, referenced by `ScrapedStream.decoder`
+     * -- see that field for when you need one, and `SegmentDecoder` for the
+     * rules. A scraper whose streams play as they are leaves this out.
+     */
+    decoders?: Record<string, SegmentDecoder>;
     /**
      * Dot-separated integers, e.g. "1.2.0" -- OPTIONAL, but required for a
      * scraper pulled in through a GitHub source (Settings > Live TV >

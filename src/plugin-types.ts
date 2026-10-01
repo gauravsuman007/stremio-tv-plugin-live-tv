@@ -4,7 +4,7 @@
  * Source of truth: stremio-tv `src/plugin-types.ts`. Structurally
  * identical -- no npm workspace link between the two repos in this pass,
  * so this is kept in sync by eye, the same as `types.ts` and `host.ts`.
- * Synced against core's `PLUGIN_API_VERSION` "1.1.0" as of this pass --
+ * Synced against core's `PLUGIN_API_VERSION` "1.2.0" as of this pass --
  * see that constant's own doc comment in the core file for the
  * MAJOR/MINOR/PATCH rule a future sync needs to check against, and bump
  * `PLUGIN_API_VERSION` below (and `plugin.ts`'s `apiVersion` field)
@@ -41,7 +41,18 @@ export type LiveStream = SharedLiveStream;
 /** The plugin contract's own version, independent of any one plugin's
  *  `version` -- see `StremioTvPlugin.apiVersion` and core's own doc
  *  comment on this same constant for the versioning rule. */
-export const PLUGIN_API_VERSION = "1.1.0";
+export const PLUGIN_API_VERSION = "1.2.0";
+
+/** Source of truth: stremio-tv `src/plugin-types.ts` `LiveFetched` -- what
+ *  `liveFetch` hands back: a fetched response whose body may be any
+ *  readable stream (a decoded segment has no socket behind it). */
+export interface LiveFetched {
+    status: number;
+    url: string;
+    type: string;
+    length: number | null;
+    body: import("node:stream").Readable;
+}
 
 /** A shelf this plugin contributes to the home board, alongside the addon
  *  catalogue shelves -- e.g. a "Trending on X" rail that links to titles
@@ -126,6 +137,10 @@ export interface StremioTvPlugin {
     ownsContentId?(type: string, id: string): boolean;
     metaFor?(type: string, id: string, session?: unknown): Promise<Record<string, unknown> | null>;
     streamsFor?(type: string, id: string, session?: unknown): Promise<LiveStream[]>;
+    /** API 1.2.0: answer one request of core's `/live` relay (a playlist,
+     *  a segment, a key) before core fetches it itself; `null` means "not
+     *  mine". Must honour `proxy`. See `relay.ts`. */
+    liveFetch?(url: string, options: { proxy: string }): Promise<LiveFetched | null>;
     searchContent?(query: string, limit: number): Promise<{ id: string; name: string; logo: string }[]>;
     settingsLink?: { label: string; href: string };
     configDir: string;

@@ -82,3 +82,21 @@ actually checking, each time.
 ## Deleting a scraper, and why the default one stays deleted
 
 `deleteScraper` (`scrapers.ts`) removes the file, `<id>.config.json` and the on/off state, then the route forgets the channel index. It also writes `<id>.deleted`: the bundled iptv-org default is re-seeded whenever its file is missing, so without the marker a Delete undid itself at the next restart. The marker only stops *seeding*; importing the same id from GitHub still installs it. The old "only source configured" lock is gone -- switching off or deleting the last source is the operator's call, and a page with no channels says why. The settings link on the plugin list points at `/tv/scrapers`, not `/tv` (that is the guide, which is where it used to land).
+
+## The live relay hook, and why a scraper's headers finally reach playback
+
+Since core plugin API 1.2.0, stremio-tv's `/live` relay asks this plugin's
+`liveFetch` (`src/relay.ts`) before fetching any live URL itself. The
+plugin answers only for mirrors that need it -- a `referrer`/`userAgent`, or
+a `decoder` naming one of the scraper's own `decoders` -- and returns `null`
+for everything else, so an ordinary channel is relayed by core exactly as
+before. Playlists answered here are read on the way through and every URI
+they name is remembered under the same rule, which is how segments on an
+unrelated CDN host get the right headers and decoder. Before 1.2.0 core
+sent neither header, so a Referer-locked mirror passed the nightly check
+and failed on the television.
+
+A decoder mirror is dropped at merge time (`fromScraper`) unless the
+scraper really exports that decoder AND `host.pluginApiVersion` is at
+least 1.2.0 (`relay-support.ts`): offered anywhere else, it would hand a
+player a picture instead of video. `test/relay.mjs` covers all of this.

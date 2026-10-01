@@ -66,6 +66,7 @@ import { getScraperConfig, setScraperConfig } from "./scraper-config.js";
 import { startScraperScheduler, stopScraperScheduler } from "./scraper-scheduler.js";
 import { lastTaskRun, runScraperTask } from "./scraper-tasks.js";
 import { scheduleSweep, stopSweep, sweep, sweepState } from "./sweep.js";
+import { liveFetch, registerStream } from "./relay.js";
 
 import { PLUGIN_API_VERSION } from "./plugin-types.js";
 import type { PluginFactory, PluginRoute, PluginRouteContext } from "./plugin-types.js";
@@ -558,7 +559,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.5.0",
+        version: "1.6.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
@@ -592,6 +593,13 @@ const createPlugin: PluginFactory = (host, configDir) => {
             } catch {
                 down = capability.status?.routeLive === true;
             }
+
+            /*
+                Every mirror that needs the relay -- a Referer, a
+                User-Agent, a segment decoder -- is made known before core
+                asks for its playlist. See `relay.ts`.
+            */
+            for (const stream of channel.streams) registerStream(stream);
 
             const list = await channelStreamList(channel, proxy, down, host.undecodableFor(session));
             const order = await rankReachability(list, [], session);
@@ -637,6 +645,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
                     };
                 });
         },
+        liveFetch,
         async searchContent(query, limit) {
             const channels = await searchChannels(query, limit);
 

@@ -52,6 +52,7 @@ import { spawn } from "node:child_process";
 
 import { pluginConfig as config } from "./plugin-config.js";
 import { host } from "./host.js";
+import { relayAvailable } from "./relay-support.js";
 import { allScrapers, beginScraperRun, endScraperRun, lastRun, recordRun, scraperEnabled, scraperStopRequested } from "./scrapers.js";
 import type { ScrapedCatalogue, Scraper } from "./scraper-types.js";
 import type { Addon, AddonFailure, MetaDetail, MetaPreview, Sourced, Stream } from "./types.js";
@@ -84,6 +85,9 @@ export interface ChannelStream {
     labels: string[];
     referrer: string;
     userAgent: string;
+    /** The scraper's named segment decoder for this mirror, or absent --
+     *  see `ScrapedStream.decoder` and `relay.ts`. */
+    decoder?: string;
     /**
      * The scraper that contributed THIS mirror -- "iptv-org" for the
      * built-in list, otherwise a `Scraper.id`. Set here, once, when a
@@ -411,7 +415,21 @@ async function fromScraper(
                 continue;
             }
 
-            const taggedStreams: ChannelStream[] = channel.streams.map((stream) => ({
+            /*
+                A MIRROR THAT NEEDS A DECODER IS KEPT ONLY WHEN IT CAN PLAY:
+                the scraper must actually export that decoder, and the
+                running stremio-tv must be new enough to let `relay.ts`
+                apply it (plugin API 1.2.0). Otherwise it would sit in the
+                list looking like any other mirror and hand the player a
+                picture instead of video.
+            */
+            const playable = channel.streams.filter(
+                (stream) => !stream.decoder || (relayAvailable() && typeof scraper.decoders?.[stream.decoder] === "function")
+            );
+
+            if (!playable.length) continue;
+
+            const taggedStreams: ChannelStream[] = playable.map((stream) => ({
                 ...stream,
                 source: scraper.id
             }));
@@ -1616,11 +1634,21 @@ export async function probeCodec(stream: ChannelStream, proxy = ""): Promise<Cod
 
         if (!segment) return null;
 
-        const got = await taste(segment, stream, proxy, PROBE_BYTES, true);
+        /*
+            A DISGUISED SEGMENT is read whole and decoded first -- the
+            first 192KB of a PNG says nothing about the video inside it,
+            and an unknown codec is what sends a channel to a full
+            re-encode at play time.
+        */
+        const decode = stream.decoder
+            ? allScrapers().find((entry) => entry.id === stream.source)?.decoders?.[stream.decoder]
+            : undefined;
+        const got = await taste(segment, stream, proxy, decode ? 64 * 1024 * 1024 : PROBE_BYTES, true);
 
         if (got.status >= 400 || got.bytes < 32 * 1024) return null;
 
-        const fact = await askFfprobe(got.data);
+        const data = decode ? Buffer.from(await decode(new Uint8Array(got.data), segment)).subarray(0, PROBE_BYTES) : got.data;
+        const fact = await askFfprobe(data);
 
         /*
             A probe that found nothing is not written down. ffprobe failing

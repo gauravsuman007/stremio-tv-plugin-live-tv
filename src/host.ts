@@ -92,6 +92,9 @@ export interface PluginHost {
         setRouteLive(on: boolean, session?: unknown): void;
     };
     liveCountries: string[];
+    /** The plugin API the running stremio-tv implements (core API 1.2.0
+     *  and later; absent on an older core). See `relay.ts` for what reads it. */
+    pluginApiVersion?: string;
     languages: string[];
     languageCode(name: string): string;
     languageName(code: string): string;
