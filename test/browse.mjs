@@ -133,6 +133,21 @@ const tamil = browsePage(client, false, {
 ok(tamil.includes("Puthiya Thalaimurai") && tamil.includes("Polimer News") && !tamil.includes("Aaj Tak"), "picking Tamil shows Tamil news only");
 ok(!tamil.includes("Region"), "a country's own page has no region row");
 
+/* ---- a language narrows the genre counts ------------------------------------ */
+
+const hindi = browsePage(client, false, {
+    scope: { country: "IN", title: "India", flag: "", path: "/tv/browse", regionChips: true },
+    regions: [],
+    channels: india,
+    genre: "",
+    language: "tam",
+    skip: 0,
+    perPage: 60,
+    status: null,
+    languageName: (code) => code
+});
+ok(!hindi.includes(">News<span class=\"n\">9</span>") && hindi.includes("g=news&amp;l=tam"), "picking a language recounts the genres and keeps the language on genre links");
+
 /* ---- inherited skin ------------------------------------------------------ */
 
 testHost.pluginApiVersion = "1.2.0";
@@ -147,7 +162,8 @@ const skinned = browsePage(client, false, {
     status: null,
     languageName: (code) => code
 });
-ok(!skinned.includes("<style"), "on a core with the plugin kit, Browse brings no stylesheet of its own");
+ok((skinned.match(/<style/g) || []).length === 1 && !skinned.includes(".sidenav {"), "on a core with the plugin kit, Browse brings only the one selected-state rule, not the kit");
+ok(skinned.includes(".step.on, .sidenav a.on"), "which gives every selected control the same look");
 ok(skinned.includes('class="sidenav"') && skinned.includes('class="chiprow"'), "it is built from core's kit classes instead");
 ok(!/style="/.test(skinned), "and no inline styles");
 ok((skinned.match(/data-src=/g) || []).length > 0 && /<img src=/.test(skinned), "the first cards load at once, later ones wait for the screen");

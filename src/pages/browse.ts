@@ -76,8 +76,21 @@ const KIT_FALLBACK = `<style>
 .sidemain .wall .chan { width: 23%; margin-right: 2%; }
 </style>`;
 
+/*
+    THE SELECTED STATE, STATED ONCE. Region, language, tab and genre all
+    mark the current choice with `.on`; core's rule for it drew some of
+    them white and some dark, so the same page read differently from
+    country to country. These rules give every selected control one
+    look -- white, bold -- on every core.
+*/
+const SELECTED = `<style>
+.step.on, .sidenav a.on { background: #ffffff !important; color: #141414 !important; font-weight: 800; }
+.step.on .n, .sidenav a.on .n { opacity: .75; }
+.chiprow .step { margin-bottom: .3em; }
+</style>`;
+
 function kit(): string {
-    return relayAvailable() ? "" : KIT_FALLBACK;
+    return (relayAvailable() ? "" : KIT_FALLBACK) + SELECTED;
 }
 
 /** Cards past the first two rows of a wall load as they near the screen
@@ -132,24 +145,25 @@ export function browsePage(client: Client, signedIn: boolean, input: BrowseInput
     const { scope, channels } = input;
 
     /*
-        THREE PASSES OVER ONE LIST, each narrowing the last: genres are
-        counted over the whole region (so the side list never changes as a
-        language is picked -- a list that reshuffles under the remote is a
-        list nobody can learn), languages over the chosen genre (so a
-        language chip never leads to an empty page), and the wall is what
-        survives both.
+        THREE PASSES OVER ONE LIST: genres are counted over the chosen
+        language (their ORDER never changes, only the numbers, so the
+        remote still lands on News in the same place), languages over the
+        chosen genre (so a language chip never leads to an empty page), and
+        the wall is what survives both. Picking a genre keeps the language
+        and the other way round; changing region clears both.
     */
     const browsable = channels.filter((channel) => genreOf(channel) !== null);
-    const genreCounts = counted(browsable.map((channel) => genreOf(channel) as string));
+    const language = input.language && browsable.some((channel) => languagesOf(channel).includes(input.language)) ? input.language : "";
+    const inLanguage = language ? browsable.filter((channel) => languagesOf(channel).includes(language)) : browsable;
+    const genreCounts = counted(inLanguage.map((channel) => genreOf(channel) as string));
     const genre = input.genre && genreCounts.has(input.genre) ? input.genre : "";
     const inGenre = genre ? browsable.filter((channel) => genreOf(channel) === genre) : browsable;
 
     const languageCounts = counted(inGenre.flatMap((channel) => languagesOf(channel)));
     const languages = [...languageCounts.entries()]
-        .filter(([, count]) => count >= 2)
+        .filter(([code, count]) => count >= 2 || code === language)
         .sort((a, b) => b[1] - a[1])
         .slice(0, 14);
-    const language = input.language && languageCounts.has(input.language) ? input.language : "";
     const shown = language ? inGenre.filter((channel) => languagesOf(channel).includes(language)) : inGenre;
     const slice = shown.slice(input.skip, input.skip + input.perPage);
 
@@ -194,7 +208,7 @@ export function browsePage(client: Client, signedIn: boolean, input: BrowseInput
             : "";
 
     const side = `<nav class="sidenav">${[
-        `<a class="${genre ? "" : "on"}" href="${escape(link({ g: "", l: "" }))}">All genres<span class="n">${browsable.length.toLocaleString("en")}</span></a>`,
+        `<a class="${genre ? "" : "on"}" href="${escape(link({ g: "" }))}">All genres<span class="n">${inLanguage.length.toLocaleString("en")}</span></a>`,
         ...GENRES.map((entry) => {
             const count = genreCounts.get(entry.id) || 0;
 
@@ -204,8 +218,8 @@ export function browsePage(client: Client, signedIn: boolean, input: BrowseInput
                 lands on News in the same place every time.
             */
             return count
-                ? `<a class="${entry.id === genre ? "on" : ""}" href="${escape(link({ g: entry.id, l: "" }))}">${escape(entry.label)}<span class="n">${count.toLocaleString("en")}</span></a>`
-                : `<a class="off" href="${escape(link({ g: entry.id, l: "" }))}">${escape(entry.label)}<span class="n">0</span></a>`;
+                ? `<a class="${entry.id === genre ? "on" : ""}" href="${escape(link({ g: entry.id }))}">${escape(entry.label)}<span class="n">${count.toLocaleString("en")}</span></a>`
+                : `<a class="off" href="${escape(link({ g: entry.id }))}">${escape(entry.label)}<span class="n">0</span></a>`;
         })
     ].join("")}</nav>`;
 
