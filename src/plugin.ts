@@ -791,7 +791,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.13.0",
+        version: "1.13.1",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {

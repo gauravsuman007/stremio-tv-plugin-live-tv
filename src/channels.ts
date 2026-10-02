@@ -1004,8 +1004,18 @@ export interface CodecFact {
 const codecs = new Map<string, CodecFact>();
 
 /** What this URL was last seen carrying, or null if nobody has looked. */
+/**
+ * What ffprobe calls a single picture. A "video" of one of these is not a
+ * video: it is a segment still wrapped in its disguise (a decoder mirror
+ * read without its decoder), and its width and height are the image's, not
+ * the picture's -- the row once read "png 1458p".
+ */
+const STILL_IMAGE = ["png", "apng", "bmp", "gif", "webp", "tiff", "ppm", "jpegls"];
+
 export function codecFor(url: string): CodecFact | null {
-    return codecs.get(url) || null;
+    const fact = codecs.get(url);
+
+    return fact && !STILL_IMAGE.includes(fact.video) ? fact : null;
 }
 
 /** How many sources have been looked at, for the page to say. */
@@ -1658,8 +1668,13 @@ export async function probeCodec(stream: ChannelStream, proxy = ""): Promise<Cod
 
         if (got.status >= 400 || got.bytes < 32 * 1024) return null;
 
+        /* A mirror that needs its decoder and has none here is not probed: the raw segment says nothing about the video. */
+        if (stream.decoder && !decode) return null;
+
         const data = decode ? Buffer.from(await decode(new Uint8Array(got.data), segment)).subarray(0, PROBE_BYTES) : got.data;
         const fact = await askFfprobe(data);
+
+        if (fact && STILL_IMAGE.includes(fact.video)) return null;
 
         /*
             A probe that found nothing is not written down. ffprobe failing
@@ -1819,28 +1834,53 @@ export function codecRank(url: string, cannot: string[]): number {
 }
 
 /**
- * The codec, said the way somebody choosing a mirror needs to hear it:
- * with the warning attached when this panel cannot take it. Empty when
- * nobody has looked, which is not worth a word on the row.
+ * How many lines a mirror's picture has: what was measured when somebody
+ * looked (ffprobe's height), else what the list says, else 0 for nothing
+ * known -- which sorts last, below every mirror with a number.
  */
-export function codecSaid(url: string, cannot: string[]): string {
-    const fact = codecFor(url);
+export function pictureLines(stream: ChannelStream): number {
+    const measured = codecFor(stream.url)?.height;
 
-    if (!fact || !fact.video) return "";
+    if (measured) return measured;
 
-    const NAMES: Record<string, string> = {
-        h264: "H.264",
-        hevc: "H.265",
-        mpeg2video: "MPEG-2",
-        vp9: "VP9",
-        av1: "AV1"
-    };
-    const name = NAMES[fact.video] || fact.video;
-    const size = fact.height ? `${fact.height}p` : "";
+    const said = stream.quality || "";
 
-    return `${[name, size].filter(Boolean).join(" ")}${
-        codecRank(url, cannot) === 0 ? ", which this device may not decode" : ""
-    }`;
+    if (/\b(4k|uhd)\b|2160/i.test(said)) return 2160;
+
+    const found = /(\d{3,4})/.exec(said);
+
+    return found ? Number(found[1]) : 0;
+}
+
+/**
+ * A source row's heading, in words a viewer can use: "1080p . H.264",
+ * "720p", or "Not checked yet" when nothing is known. The codec's warning
+ * for this device rides along. (Core reads a quality tag for the row out
+ * of this line -- "1080p", "4K" -- and shows the line itself as the
+ * release name.)
+ */
+export function streamHeading(stream: ChannelStream, cannot: string[]): string {
+    const fact = codecFor(stream.url);
+    const lines = pictureLines(stream);
+    const picture = lines >= 2160 ? "4K" : lines ? `${lines}p` : "";
+    const NAMES: Record<string, string> = { h264: "H.264", hevc: "H.265", mpeg2video: "MPEG-2", vp9: "VP9", av1: "AV1" };
+    const codec = fact && fact.video ? NAMES[fact.video] || fact.video : "";
+    const said = [picture, codec].filter(Boolean).join(" \u00b7 ");
+
+    if (!said) return "Not checked yet";
+
+    return `${said}${codecRank(stream.url, cannot) === 0 ? ", which this device may not decode" : ""}`;
+}
+
+/**
+ * The row's text. Line one is the heading; the gear line is where core
+ * puts a source's origin next to "Live TV" -- here, WHICH scraper or site
+ * the mirror came from and which host serves it.
+ */
+function streamTitle(stream: ChannelStream, cannot: string[]): string {
+    const origin = [addonFor(stream.source).manifest.name, hostOf(stream.url)].filter(Boolean).join(" \u00b7 ");
+
+    return [streamHeading(stream, cannot), ...stream.labels, origin ? `\u2699\ufe0f ${origin}` : ""].filter(Boolean).join("\n");
 }
 
 export function rankStreams(
@@ -1852,12 +1892,6 @@ export function rankStreams(
      */
     cannot: string[] = []
 ): ChannelStream[] {
-    const lines = (quality: string): number => {
-        const found = /(\d{3,4})/.exec(quality);
-
-        return found ? Number(found[1]) : 0;
-    };
-
     /*
         FIVE RUNGS, because there are five genuinely different things that
         can be known about a mirror, and collapsing any two of them loses
@@ -1911,11 +1945,13 @@ export function rankStreams(
     return [...channel.streams].sort(
         (a, b) =>
             evidence(b) - evidence(a) ||
-            sourceRank(b.source) - sourceRank(a.source) ||
             codecRank(b.url, cannot) - codecRank(a.url, cannot) ||
-            reputationOf(b.url) - reputationOf(a.url) ||
+            /* A mirror that says it is not on all day, or fenced, goes behind any that does not. */
             a.labels.length - b.labels.length ||
-            lines(b.quality) - lines(a.quality) ||
+            /* THE PICTURE, highest first, a mirror that says nothing last. */
+            pictureLines(b) - pictureLines(a) ||
+            sourceRank(b.source) - sourceRank(a.source) ||
+            reputationOf(b.url) - reputationOf(a.url) ||
             a.url.localeCompare(b.url)
     );
 }
@@ -2193,14 +2229,7 @@ export async function channelStreamList(
                 value: {
                     url: stream.url,
                     name: "Live",
-                    title: [
-                        stream.quality || "unknown quality",
-                        ...stream.labels,
-                        addonFor(stream.source).manifest.name,
-                        hostOf(stream.url)
-                    ]
-                        .filter(Boolean)
-                        .join("\n")
+                    title: streamTitle(stream, cannot)
                 } as Stream
             })),
             failures: [
@@ -2273,30 +2302,7 @@ export async function channelStreamList(
             value: {
                 url: stream.url,
                 name: at < good.length ? CHECKED : "Live",
-                title: [
-                    /*
-                        THE CODEC IS SAID OUT LOUD when it is known, because
-                        this list exists for the viewer who wants to choose
-                        for themselves -- and "H.265, which this browser
-                        cannot decode" is the single most useful thing that
-                        can be said about a mirror that looks fine and will
-                        not play.
-                    */
-                    codecSaid(stream.url, cannot) || stream.quality || "unknown quality",
-                    ...stream.labels,
-                    /*
-                        THE SOURCE BADGE. `from` already carries this as
-                        structured data for a client that reads it, but the
-                        Settings > Live TV > channel page renders this list
-                        as a plain title, so it is repeated here in words --
-                        "ntvst" or "iptv-org", not just an addon id nobody
-                        asked for.
-                    */
-                    addonFor(stream.source).manifest.name,
-                    hostOf(stream.url)
-                ]
-                    .filter(Boolean)
-                    .join("\n")
+                title: streamTitle(stream, cannot)
             } as Stream
         })),
         failures

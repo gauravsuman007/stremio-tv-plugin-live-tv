@@ -24,7 +24,7 @@ import { testHost } from "./_test-host.mjs";
 const { setHost } = await import("../dist/host.js");
 setHost(testHost);
 
-const { probeCodec, codecFor, codecRank, rankStreams, verify, deepVerify } = await import("../dist/channels.js");
+const { probeCodec, codecFor, codecRank, rankStreams, verify, deepVerify, channelStreamList } = await import("../dist/channels.js");
 
 let checks = 0;
 const check = (what, value) => {
@@ -171,6 +171,32 @@ check(
 const only = rankStreams({ ...channel, streams: [OLD] }, []);
 
 same("a channel whose only mirror is awkward still has it", only.length, 1);
+
+/* ---- highest picture first, and a row that says what it is --------------- */
+
+const mirror = (name, quality, source = "iptv-org") => ({ url: `https://${name}.example.test/index.m3u8`, quality, labels: [], referrer: "", userAgent: "", source });
+const mixed = { id: "iptv:Mixed.xx", name: "Mixed", logo: "", categories: [], labels: [], streams: [mirror("none", ""), mirror("sd", "480p"), mirror("hd", "1080p"), mirror("uhd", "4K")] };
+
+assert.deepEqual(
+    rankStreams(mixed, []).map((stream) => stream.url.split("/")[2].split(".")[0]),
+    ["uhd", "hd", "sd", "none"],
+    "4K, then 1080p, then 480p, and a mirror that says nothing last"
+);
+checks += 1;
+
+const rows = (await channelStreamList(mixed, "", true, [])).items.map((entry) => entry.value.title.split("\n"));
+
+same("a stated 4K reads 4K", rows[0][0], "4K");
+same("a stated 1080p reads 1080p", rows[1][0], "1080p");
+same("and nothing known says so, not 'unknown quality'", rows[3][0], "Not checked yet");
+check("the origin is on its own gear line, scraper then host", rows[1].includes("\u2699\ufe0f iptv-org \u00b7 hd.example.test"));
+
+/* A still picture is never a codec: a decoder mirror probed raw read "png 1458p". */
+const raw = mirror("disguised", "");
+
+raw.decoder = "tiktikpx";
+same("a mirror that needs a decoder it does not have is not probed", await probeCodec(raw), null);
+same("so nothing is recorded for it", codecFor(raw.url), null);
 
 origin.close();
 
