@@ -50,10 +50,20 @@ export const pluginConfig = {
     get epgOverrides(): string {
         return base ? `${base}/epg-overrides.json` : "";
     },
+    /** Every channel logo: the original, and the copy made for the television. */
+    get logosDir(): string {
+        return base ? `${base}/logos` : "";
+    },
+    /** What was decided about each logo, so a night's pass only looks at what is new. */
+    get logoState(): string {
+        return base ? `${base}/logos.json` : "";
+    },
     get liveChecks(): string {
         return base ? `${base}/live-checks.json` : "";
     },
     /** Same env var as the original, single-deployment config -- there is
      *  still only one process, so one knob for when the sweep runs. */
-    liveSweepHour: Number(process.env.LIVE_SWEEP_HOUR ?? 3)
+    liveSweepHour: Number(process.env.LIVE_SWEEP_HOUR ?? 3),
+    /** Local hour of the nightly logo pass; -1 turns the nightly run off. */
+    liveLogoHour: Number(process.env.LIVE_LOGO_HOUR ?? 4)
 };

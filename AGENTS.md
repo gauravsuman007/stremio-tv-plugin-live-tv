@@ -44,7 +44,8 @@ and delete, so the old module instance is orphaned rather than replaced. Its
 timers keep running unless `dispose()` (in `src/plugin.ts`) stops them. Any
 new `setInterval`, recurring `setTimeout` or long-running loop needs a stop
 function called from there -- today: the scraper scheduler, the nightly sweep
-(and any pass in flight, via `halted`), and the pending check-store write,
+(and any pass in flight, via `halted`), the logo store (`logos.ts`: its start-up and
+nightly timers and any pass in flight), and the pending check-store write,
 which is flushed rather than dropped. Bump the version in `plugin.json` and
 `src/plugin.ts` together.
 
@@ -127,3 +128,20 @@ proportional to duration; the TV's time and the channel's zone from
 a Programs button that opens a sidebar headed by the channel's logo and
 name, listing the next 12 hours. `metaFor` never waits on the network --
 core calls it on Play too. `dispose()` stops both timers.
+
+## Channel logos (`logos.ts`, `logo-image.ts`)
+
+Every logo URL in the index is downloaded once and kept under
+`<configDir>/logos/` (original as `<sha1(url)>.orig`, display copy beside it);
+decisions are in `<configDir>/logos.json`. A pass runs ~30 s after load, nightly
+(`LIVE_LOGO_HOUR`, default 4, -1 = off) and from the Sources page; it skips
+anything settled. Decoding is ffmpeg's (the binary core ships) -- no image
+library. `render.ts#chanCard` swaps the card's picture for this plugin's
+`/tv/logo/:file` route by rewriting core's `/img/<b64>?w=480&h=1` link in the
+returned HTML.
+
+Why SVG: core's image route bakes a WHITE halo under every raster logo but
+relays an SVG as it is, so the tile (option C) and name pill (option E) are SVG.
+Changing the look means bumping `LOGO_DESIGN` in `logo-image.ts`: every logo is
+remade from its saved original, no download. Only cards are swapped; the title
+page and the player sidebar still use core's own logo URL.
