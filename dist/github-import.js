@@ -164,10 +164,10 @@ async function githubApi(path, token) {
  * copy is a real update (or the id is new). Never touches a scraper whose
  * id belongs to a built-in.
  */
-export async function importFromGithub(owner, repo, token, only) {
+export async function importFromGithub(owner, repo, token) {
     const result = { imported: [], updated: [], skipped: [], errors: [] };
     const listing = await githubApi(`repos/${owner}/${repo}/contents/dist?ref=${BRANCH}`, token);
-    const entries = (Array.isArray(listing) ? listing : [listing]).filter((entry) => entry.type === "file" && entry.name.endsWith(".mjs") && (!only || only.includes(entry.name)));
+    const entries = (Array.isArray(listing) ? listing : [listing]).filter((entry) => entry.type === "file" && entry.name.endsWith(".mjs"));
     if (!entries.length) {
         throw new Error("no .mjs files in dist/ on that branch -- see that repo's AGENTS.md: compiled output must be committed there");
     }
