@@ -40,6 +40,27 @@ export function importSummary(result) {
         parts.push(`failed ${result.errors.map((e) => `${e.file}: ${e.error}`).join("; ")}`);
     return parts.length ? parts.join(". ") + "." : "Nothing in dist/ to import.";
 }
+/**
+ * THE LOGOS, on the Sources page: every channel logo is kept on disk, and
+ * the ones that would be hard to see on an OLED are remade. Says what the
+ * last pass did and how the logos are split.
+ */
+export function logosSection(client, logos) {
+    const { pass, counts } = logos;
+    const n = (value) => value.toLocaleString("en");
+    const last = logos.running
+        ? `Working now${logos.progress ? `: ${n(logos.progress.done)} of ${n(logos.progress.total)} settled` : ""}&hellip; (reload this page to see how far it has got)`
+        : !pass
+            ? "Not run yet &mdash; the first pass starts shortly after the plugin loads."
+            : pass.ok
+                ? `Last pass ${escape(since(pass.at))} (${escape(pass.reason)}), ${pass.seconds}s: ${n(pass.fetched)} downloaded, ${n(pass.reprocessed)} remade from the saved originals, ${n(pass.skipped)} already settled.`
+                : `Last pass failed ${escape(since(pass.at))}: ${escape(pass.error || "unknown error")}.`;
+    return `<h3 class="lead">Channel logos</h3>
+<p class="hint">Every logo is downloaded once and kept on disk, so a card never waits on (or loses its picture to) the site it came from. A logo that is hard to read on black &mdash; a black or navy wordmark, or one sitting in a white rectangle &mdash; is remade: the background is cut away and it is lifted to a readable colour on a near-black tile. A channel with no logo, or whose logo is gone, shows its name in a tinted pill. Nothing is drawn on white. Settled logos are not looked at again; the nightly pass only handles what is new or changed.</p>
+<p class="hint">${last}</p>
+<p class="hint"><strong>${n(counts.ok)}</strong> readable as they are, <strong>${n(counts.processed)}</strong> remade for the dark tile, <strong>${n(counts.svg)}</strong> vector logos kept as they are, <strong>${n(counts.failed)}</strong> gone or unreadable (shown as a name pill), <strong>${n(counts.noLogo)}</strong> channels without a logo (name pill)${counts.retry ? `, <strong>${n(counts.retry)}</strong> to try again later` : ""}.</p>
+<form method="POST" action="${escape(client.link("/tv/scrapers/logos"))}" class="inline"><input type="hidden" name="refresh" value="1"><button class="step" type="submit"${logos.running ? " disabled" : ""}>${logos.running ? "Working&hellip;" : "Process logos now"}</button></form>`;
+}
 function percent(part, whole) {
     return whole ? `${Math.round((part / whole) * 100)}%` : "0%";
 }
@@ -86,7 +107,7 @@ ${mapping}
 <p class="hint">${dynamicNote}</p>
 <form method="POST" action="${escape(client.link("/tv/scrapers/guide"))}" class="inline"><input type="hidden" name="dynamic" value="${guide.dynamic ? "off" : "on"}"><button class="step" type="submit">${guide.dynamic ? "Switch off" : "Switch on"}</button></form>`;
 }
-export function scrapersPage(client, signedIn, rows, githubSources = [], importNote = null, vpn = null, guide = null) {
+export function scrapersPage(client, signedIn, rows, githubSources = [], importNote = null, vpn = null, guide = null, logos = null) {
     const list = rows
         .map((row) => {
         const status = row.running
@@ -154,6 +175,7 @@ ${vpnPanel}`
 ${list.length ? `<ul class="rails">\n${list}\n</ul>` : `<p class="empty">No sources are configured.</p>`}
 <p class="bar"><a class="step" href="${escape(`${client.link("/tv/scrapers")}?reload=1`)}">Reload sources</a></p>
 ${guide ? guideSection(client, guide) : ""}
+${logos ? logosSection(client, logos) : ""}
 ${importNote ? `<p class="hint${importNote.ok ? "" : " error"}">${escape(importNote.text)}</p>` : ""}
 <h3 class="lead">Import from GitHub</h3>
 <p class="hint">Reads every <code>.mjs</code> file in a repository's <code>dist/</code> directory and drops in whichever ones are new or genuinely newer than what is already running &mdash; see &ldquo;Versioning&rdquo; below. A token is only needed for a private repository, and is remembered so you do not retype it on the next check.</p>

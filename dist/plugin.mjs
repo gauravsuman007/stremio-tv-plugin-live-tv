@@ -13,7 +13,7 @@
  */
 import { setHost } from "./host.js";
 import { initPluginConfig } from "./plugin-config.js";
-import { chrome, escape, page } from "./render.js";
+import { chrome, escape, page, setLogoSwap } from "./render.js";
 import { channelIndex, channelMeta, regionChips, channelStreamList, allChannelsRanked, channelsIn, codecFor, countries, countryNamed, findChannel, forgetChannels, expireScraperResult, stopChannelRefresh, isChannelId, liveRails, loadChecks, rankReachability, runScraperNow, searchChannels, flushChecks } from "./channels.js";
 import { channelSearchPage, livePage } from "./pages/tv.js";
 import { browsePage, worldPage } from "./pages/browse.js";
@@ -30,6 +30,7 @@ import { liveFetch, registerStream } from "./relay.js";
 import { GuideStore, defaultFetcher, nowLine } from "./epg.js";
 import { warmSites } from "./epg-sites.js";
 import { BulkGuide } from "./epg-bulk.js";
+import { LogoStore } from "./logos.js";
 import { zoneForCountry } from "./timezones.js";
 import { existsSync as fileExists, readFileSync as readFile, writeFileSync as writeFile } from "node:fs";
 import { pluginConfig } from "./plugin-config.js";
@@ -159,6 +160,24 @@ const createPlugin = (host, configDir) => {
         void guide.ready().catch(() => undefined);
         void warmSites(defaultFetcher);
     }
+    /*
+        THE LOGOS: every one kept on disk and made fit for an OLED (see
+        `logos.ts`). A pass runs shortly after load -- so an update does not
+        wait for the night -- and again nightly; settled logos are skipped.
+        Stopped by `dispose()`.
+    */
+    const logos = new LogoStore({
+        dir: pluginConfig.logosDir,
+        stateFile: pluginConfig.logoState,
+        hour: pluginConfig.liveLogoHour,
+        channels: async () => {
+            const built = await channelIndex();
+            return built ? [...built.byId.values()].map((channel) => ({ id: channel.id, name: channel.name, logo: channel.logo })) : [];
+        },
+        log: (line) => console.log(line)
+    });
+    setLogoSwap((channel) => logos.swap(channel));
+    logos.start();
     /**
      * A channel's schedule: the whole-guide data first (in memory, instant),
      * then -- when per-channel fetching is on -- a lookup of its own, waited
@@ -206,6 +225,11 @@ const createPlugin = (host, configDir) => {
             running: bulk.isRunning(),
             dynamic: guideSettings.dynamic,
             warm: guideSettings.dynamic ? guide.recentChannels().length : 0
+        }, {
+            pass: logos.lastPass(),
+            running: logos.isRunning(),
+            progress: logos.progressNow(),
+            counts: logos.counts()
         }));
     }
     async function sendScraperConfigPage(client, signedIn, scraperId, note) {
@@ -280,6 +304,23 @@ const createPlugin = (host, configDir) => {
                 if (ctx.form.get("dynamic"))
                     setDynamicGuide(ctx.form.get("dynamic") === "on");
                 return redirect(ctx.client, "/tv/scrapers");
+            }
+        },
+        {
+            method: "POST",
+            path: "/tv/scrapers/logos",
+            async handle(ctx) {
+                if (ctx.form.get("refresh"))
+                    void logos.refresh("manual").catch(() => undefined);
+                return redirect(ctx.client, "/tv/scrapers");
+            }
+        },
+        {
+            /* A stored or generated logo, as the cards link to it (see `render.ts`). */
+            method: "GET",
+            path: "/tv/logo/:file",
+            async handle(ctx) {
+                return logos.serve(String(ctx.params.file), ctx.query);
             }
         },
         {
@@ -582,7 +623,7 @@ const createPlugin = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.12.2",
+        version: "1.13.1",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
@@ -592,6 +633,7 @@ const createPlugin = (host, configDir) => {
             flushChecks();
             guide.stop();
             bulk.stop();
+            logos.stop();
         },
         routes: () => routes,
         ownsContentId: (type, id) => type === "tv" && isChannelId(id),
