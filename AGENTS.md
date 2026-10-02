@@ -145,3 +145,27 @@ relays an SVG as it is, so the tile (option C) and name pill (option E) are SVG.
 Changing the look means bumping `LOGO_DESIGN` in `logo-image.ts`: every logo is
 remade from its saved original, no download. Only cards are swapped; the title
 page and the player sidebar still use core's own logo URL.
+
+
+## A stream can be a handle: resolving at the moment of use
+
+`ScrapedStream.resolver` names an entry in the scraper's `resolvers`; the
+stream's `url` is then a stable HANDLE that is never fetched, and
+`src/resolve.ts` turns it into a real address whenever `verify`,
+`deepVerify`, `probeCodec` or the relay (`liveFetch`) is about to fetch it
+(answers reused five minutes, failures twenty seconds). Everything keyed by
+URL -- evidence, ranking, the relay's rule table -- stays keyed by the
+handle. A resolver that has nothing is a dead mirror (`verify` false, the
+relay answers 502), never a fetch of the handle.
+
+It exists for sources whose address is signed and expires, or whose
+handshake changes: zlive.st's lasts 2.5 hours, and an out-of-date handshake
+is answered with a looping decoy video instead of an error, which every
+"is it a playlist" check calls a working channel.
+
+**Needs stremio-tv plugin API 1.5.0** (`resolverAvailable()` in
+`relay-support.ts`): the core must never give a handle to a device to fetch
+directly (`direct:` in its `index.ts`). On an older core resolver mirrors are
+dropped, not offered. This mirrors the standalone live-tv app's
+`src/livetv/resolve.ts`; keep the two in step, and `docs/scraper-template.ts`
+with `src/scraper-types.ts`.

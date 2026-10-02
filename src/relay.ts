@@ -45,6 +45,7 @@ import { Readable } from "node:stream";
 import { host } from "./host.js";
 import { channelIndex, type ChannelStream } from "./channels.js";
 import { allScrapers } from "./scrapers.js";
+import { aimOf } from "./resolve.js";
 
 import type { LiveFetched } from "./plugin-types.js";
 
@@ -54,6 +55,10 @@ interface Rule {
     userAgent: string;
     /** `scraper id` + decoder name, or absent for headers only. */
     decoder?: { scraper: string; name: string };
+    /** Present on a mirror whose `url` is a HANDLE (`ScrapedStream.resolver`):
+     *  what `resolve.ts` needs to turn it into an address. Absent on every
+     *  URL a playlist names, which are real addresses already. */
+    resolve?: { handle: string; resolver: string; source: string };
     /** When this rule was last confirmed, for expiry. */
     at: number;
 }
@@ -83,8 +88,8 @@ const PEEK = 8 * 1024;
 const rules = new Map<string, Rule>();
 
 /** Whether this mirror needs the relay at all. Most do not. */
-export function needsRelay(stream: Pick<ChannelStream, "referrer" | "userAgent" | "decoder">): boolean {
-    return Boolean(stream.referrer || stream.userAgent || stream.decoder);
+export function needsRelay(stream: Pick<ChannelStream, "referrer" | "userAgent" | "decoder" | "resolver">): boolean {
+    return Boolean(stream.referrer || stream.userAgent || stream.decoder || stream.resolver);
 }
 
 function ruleOf(stream: ChannelStream): Rule {
@@ -92,6 +97,7 @@ function ruleOf(stream: ChannelStream): Rule {
         referrer: stream.referrer,
         userAgent: stream.userAgent,
         decoder: stream.decoder ? { scraper: stream.source, name: stream.decoder } : undefined,
+        resolve: stream.resolver ? { handle: stream.url, resolver: stream.resolver, source: stream.source } : undefined,
         at: Date.now()
     };
 }
@@ -235,11 +241,35 @@ function answer(status: number, url: string, type: string, body: Buffer): LiveFe
  * for -- which is nearly all of them.
  */
 export async function liveFetch(url: string, options: { proxy: string }): Promise<LiveFetched | null> {
-    const rule = await ruleFor(url);
+    const found = await ruleFor(url);
 
-    if (!rule) return null;
+    if (!found) return null;
 
-    const upstream = await host.fetchVia(url, {
+    /*
+        A HANDLE IS RESOLVED HERE, and nowhere earlier, so what is fetched is
+        the address as it is this second. Everything the playlist then names
+        gets the rule of the RESOLVED stream -- its headers, not the
+        handle's -- and none of it is itself a handle.
+    */
+    let rule: Rule = found;
+    let target = url;
+
+    if (found.resolve) {
+        const aim = await aimOf({
+            url: found.resolve.handle,
+            referrer: found.referrer,
+            userAgent: found.userAgent,
+            resolver: found.resolve.resolver,
+            source: found.resolve.source
+        });
+
+        if (!aim) return answer(502, url, "text/plain", Buffer.from("This source could not be resolved right now."));
+
+        target = aim.url;
+        rule = { ...found, referrer: aim.referrer, userAgent: aim.userAgent, resolve: undefined };
+    }
+
+    const upstream = await host.fetchVia(target, {
         proxy: options.proxy,
         headers: {
             "user-agent": rule.userAgent || DEFAULT_UA,
@@ -278,7 +308,7 @@ export async function liveFetch(url: string, options: { proxy: string }): Promis
         }
 
         for (const uri of urisOf(whole.toString("utf8"), upstream.url)) remember(uri, rule);
-        remember(url, rule);
+        remember(url, found);
 
         return answer(upstream.status, upstream.url, "application/vnd.apple.mpegurl", whole);
     }

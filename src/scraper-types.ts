@@ -48,7 +48,51 @@ export interface ScrapedStream {
      * player something it cannot play.
      */
     decoder?: string;
+    /**
+     * OPTIONAL. The name of an entry in this same scraper's `resolvers`
+     * (see `Scraper.resolvers`) that turns this stream's `url` into a
+     * playable one AT THE MOMENT IT IS NEEDED. Leave it out for an ordinary
+     * stream -- nearly all of them.
+     *
+     * For a source whose playable address cannot be written down ahead of
+     * time: it is signed and expires (zlive's lasts two and a half hours),
+     * or it is bound to the caller, or it is minted by a handshake that
+     * must be repeated. Resolved once at scrape time, such a URL is stale by
+     * the time anyone presses Play, and -- worse -- a source that has
+     * changed its handshake answers an out-of-date one with a decoy rather
+     * than an error, which is then indistinguishable from a working channel.
+     *
+     * With a resolver, `url` is a HANDLE: any stable, unique URL that names
+     * the stream (convention: `https://<scraper id>.invalid/<key>` -- a
+     * host that can never resolve, so a handle that somehow escaped
+     * resolution fails cleanly instead of fetching something else). It is
+     * what the host stores evidence against, ranks, and shows. It is never
+     * fetched. The host calls the resolver for every check, probe and play,
+     * and fetches what it returns.
+     *
+     * A NAME, for the reason `decoder` is one: the catalogue is stored as
+     * JSON. A name with no matching resolver drops the stream.
+     */
+    resolver?: string;
 }
+
+/**
+ * What a resolver hands back: the real address, and -- only when they
+ * differ from the stream's own -- the headers it needs. The host caches the
+ * answer for a few minutes and asks again when it lapses, so this may do a
+ * network round trip, but a resolver is called on the way to a press of
+ * Play and should answer in a few seconds. Return `null` when the stream
+ * cannot be resolved right now; the host treats that as a dead mirror and
+ * moves on to the next, which is exactly what a throw does too.
+ */
+export interface ResolvedStream {
+    url: string;
+    referrer?: string;
+    userAgent?: string;
+}
+
+/** `handle` is the stream's own `url`. See `ScrapedStream.resolver`. */
+export type StreamResolver = (handle: string) => Promise<ResolvedStream | null>;
 
 /**
  * Turns one segment, exactly as the CDN served it, into what a player
@@ -255,6 +299,11 @@ export interface Scraper {
      * rules. A scraper whose streams play as they are leaves this out.
      */
     decoders?: Record<string, SegmentDecoder>;
+    /**
+     * OPTIONAL. Named stream resolvers, referenced by
+     * `ScrapedStream.resolver` -- see that field for when you need one.
+     */
+    resolvers?: Record<string, StreamResolver>;
     /**
      * Dot-separated integers, e.g. "1.2.0" -- OPTIONAL, but required for a
      * scraper pulled in through a GitHub source (Settings > Live TV >

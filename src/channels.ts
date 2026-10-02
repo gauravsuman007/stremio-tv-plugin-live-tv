@@ -52,7 +52,8 @@ import { spawn } from "node:child_process";
 
 import { pluginConfig as config } from "./plugin-config.js";
 import { host } from "./host.js";
-import { relayAvailable } from "./relay-support.js";
+import { relayAvailable, resolverAvailable } from "./relay-support.js";
+import { aimOf } from "./resolve.js";
 import { genreLabel, genreOf, languageLabel, languagesOf } from "./taxonomy.js";
 import { allScrapers, beginScraperRun, endScraperRun, lastRun, recordRun, scraperEnabled, scraperStopRequested } from "./scrapers.js";
 import type { ScrapedCatalogue, Scraper } from "./scraper-types.js";
@@ -89,6 +90,9 @@ export interface ChannelStream {
     /** The scraper's named segment decoder for this mirror, or absent --
      *  see `ScrapedStream.decoder` and `relay.ts`. */
     decoder?: string;
+    /** The scraper's named resolver, when `url` is a handle rather than
+     *  an address -- see `ScrapedStream.resolver` and `resolve.ts`. */
+    resolver?: string;
     /**
      * The scraper that contributed THIS mirror -- "iptv-org" for the
      * built-in list, otherwise a `Scraper.id`. Set here, once, when a
@@ -428,8 +432,17 @@ async function fromScraper(
                 list looking like any other mirror and hand the player a
                 picture instead of video.
             */
+            /*
+                The same goes for a mirror that names a RESOLVER: its `url`
+                is a handle that goes nowhere on its own, and it needs the
+                relay as much as a decoder does (it is the relay that
+                resolves it for the player), and a core that knows never to
+                hand it to the television directly (API 1.5.0).
+            */
             const playable = channel.streams.filter(
-                (stream) => !stream.decoder || (relayAvailable() && typeof scraper.decoders?.[stream.decoder] === "function")
+                (stream) =>
+                    (!stream.decoder || (relayAvailable() && typeof scraper.decoders?.[stream.decoder] === "function")) &&
+                    (!stream.resolver || (resolverAvailable() && typeof scraper.resolvers?.[stream.resolver] === "function"))
             );
 
             if (!playable.length) continue;
@@ -1323,11 +1336,20 @@ export async function verify(stream: ChannelStream, proxy = ""): Promise<boolean
     let ok = false;
 
     try {
-        const upstream = await fetchVia(stream.url, {
+        /*
+            A mirror with a resolver is asked for where it is NOW. The
+            answer is stored under the handle either way, so it survives
+            the address changing.
+        */
+        const aim = await aimOf(stream);
+
+        if (!aim) throw new Error("unresolvable");
+
+        const upstream = await fetchVia(aim.url, {
             proxy,
             headers: {
-                "user-agent": stream.userAgent || "VLC/3.0.20 LibVLC/3.0.20",
-                ...(stream.referrer ? { referer: stream.referrer } : {})
+                "user-agent": aim.userAgent || "VLC/3.0.20 LibVLC/3.0.20",
+                ...(aim.referrer ? { referer: aim.referrer } : {})
             },
             timeoutMs: CHECK_MS
         });
@@ -1629,18 +1651,25 @@ function askFfprobe(data: Buffer): Promise<CodecFact | null> {
  */
 export async function probeCodec(stream: ChannelStream, proxy = ""): Promise<CodecFact | null> {
     try {
-        const top = await taste(stream.url, stream, proxy, 64 * 1024);
+        /* Where this mirror is NOW: its own address, or a resolver's answer (`resolve.ts`). */
+        const aim = await aimOf(stream);
+
+        if (!aim) return null;
+
+        const live: ChannelStream = { ...stream, url: aim.url, referrer: aim.referrer, userAgent: aim.userAgent };
+
+        const top = await taste(live.url, live, proxy, 64 * 1024);
 
         if (top.status >= 400 || !top.text.trimStart().startsWith("#EXTM3U")) return null;
 
-        const first = urisIn(top.text, stream.url);
+        const first = urisIn(top.text, live.url);
         let list: { url: string; text: string } | null = null;
 
         if (first.variants.length === 0) {
-            list = { url: stream.url, text: top.text };
+            list = { url: live.url, text: top.text };
         } else {
             for (const variant of first.variants.slice(0, VARIANTS)) {
-                const inner = await taste(variant, stream, proxy, 64 * 1024);
+                const inner = await taste(variant, live, proxy, 64 * 1024);
 
                 if (inner.status < 400 && inner.text.trimStart().startsWith("#EXTM3U")) {
                     list = { url: variant, text: inner.text };
@@ -1664,7 +1693,7 @@ export async function probeCodec(stream: ChannelStream, proxy = ""): Promise<Cod
         const decode = stream.decoder
             ? allScrapers().find((entry) => entry.id === stream.source)?.decoders?.[stream.decoder]
             : undefined;
-        const got = await taste(segment, stream, proxy, decode ? 64 * 1024 * 1024 : PROBE_BYTES, true);
+        const got = await taste(segment, live, proxy, decode ? 64 * 1024 * 1024 : PROBE_BYTES, true);
 
         if (got.status >= 400 || got.bytes < 32 * 1024) return null;
 
@@ -1703,14 +1732,21 @@ export async function deepVerify(stream: ChannelStream, proxy = ""): Promise<boo
     let ok = false;
 
     try {
-        const top = await taste(stream.url, stream, proxy, 64 * 1024);
+        /* Where this mirror is NOW: its own address, or a resolver's answer (`resolve.ts`). */
+        const aim = await aimOf(stream);
+
+        if (!aim) throw new Error("unresolvable");
+
+        const live: ChannelStream = { ...stream, url: aim.url, referrer: aim.referrer, userAgent: aim.userAgent };
+
+        const top = await taste(live.url, live, proxy, 64 * 1024);
 
         if (top.status < 400 && top.text.trimStart().startsWith("#EXTM3U")) {
-            const first = urisIn(top.text, stream.url);
+            const first = urisIn(top.text, live.url);
             const lists: { url: string; text: string }[] = [];
 
             if (first.variants.length === 0) {
-                lists.push({ url: stream.url, text: top.text });
+                lists.push({ url: live.url, text: top.text });
             } else {
                 /*
                     MORE THAN ONE RENDITION IS TRIED, and that is not
@@ -1722,7 +1758,7 @@ export async function deepVerify(stream: ChannelStream, proxy = ""): Promise<boo
                     television does not have.
                 */
                 for (const variant of first.variants.slice(0, VARIANTS)) {
-                    const inner = await taste(variant, stream, proxy, 64 * 1024);
+                    const inner = await taste(variant, live, proxy, 64 * 1024);
 
                     if (inner.status < 400 && inner.text.trimStart().startsWith("#EXTM3U")) {
                         lists.push({ url: variant, text: inner.text });
@@ -1736,7 +1772,7 @@ export async function deepVerify(stream: ChannelStream, proxy = ""): Promise<boo
 
                 if (!segment) continue;
 
-                const got = await taste(segment, stream, proxy, SEGMENT_BYTES);
+                const got = await taste(segment, live, proxy, SEGMENT_BYTES);
 
                 /*
                     Bytes, and not an error page wearing a 200. An HLS
