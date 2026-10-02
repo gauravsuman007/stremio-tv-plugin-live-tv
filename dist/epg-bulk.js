@@ -1,32 +1,40 @@
 /**
- * THE WHOLE GUIDE, EVERY 12 HOURS.
+ * THE WHOLE GUIDE, EVERY 12 HOURS -- in two tiers.
  *
- * epg.pw publishes one XMLTV file for every channel it carries (~50 MB
- * gzipped, ~470 MB of XML, ~1.4 million programmes). Every 12 hours this
- * streams it once -- never holding it whole -- and keeps, for each channel
- * in THIS plugin's index that matched a guide channel, the programmes from
- * 12 hours ago to 36 hours ahead. So any channel page opens with its
- * schedule already there, whether or not anybody has looked at it before.
+ * 1. BY ID (exact). iptv-org's own mapping (`epg-ids.ts`) says which bulk
+ *    XMLTV file carries an iptv-org channel and under which id. The files
+ *    that publish one downloadable guide -- i.mjh.nz (Plex, Pluto, Samsung,
+ *    Roku, PBS, Sky Go, Foxtel, the Australian cities...) and
+ *    epg.iptvx.one -- are streamed once each, and a channel is matched by
+ *    that id. Nothing is compared by name, so look-alikes cannot mix.
+ * 2. BY NAME (guarded). epg.pw publishes one XMLTV file for every channel it
+ *    carries (~50 MB gzipped, ~1.4 million programmes), streamed once. A
+ *    channel with no ID-mapped schedule is matched by `epg.ts`'s
+ *    `matchChannel`: exact name, STRICTLY the same country, and the other
+ *    rules in that file's header.
  *
- * Matching is `epg.ts`'s `matchChannel`: exact normalized name, and
- * STRICTLY the same country -- nothing is ever matched across countries,
- * and a channel with no country is not matched at all. Every run records
- * how many of the index's channels matched and how many did not, per
- * country, for the Sources page.
+ * Either way each file is streamed, never held whole, and only the
+ * programmes of channels in THIS plugin's index from 12 hours ago to 36
+ * hours ahead are kept, so any channel page opens with its schedule already
+ * there. Every run records how many channels matched, by which tier and in
+ * which country, for the Sources page.
  *
- * Per-channel fetching (`GuideStore` in `epg.ts`) still exists, switched
- * off by default; see `plugin.ts`.
+ * Per-channel fetching (`GuideStore` in `epg.ts`) runs on top of this for a
+ * channel neither tier covered; see `plugin.ts`.
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { createGunzip } from "node:zlib";
 import { buildIndex, countryCode, matchChannel, parseDirectory } from "./epg.js";
+import { GUIDES_URL, buildLinks } from "./epg-ids.js";
 const HOUR = 3_600_000;
 export const BULK_EVERY = 12 * HOUR;
 const KEEP_BEFORE = 12 * HOUR;
 const KEEP_AFTER = 36 * HOUR;
 const GUIDE_URL = "https://epg.pw/xmltv/epg.xml.gz";
+/** guides.json is ~25 MB: the supported rows are kept for a week. */
+const LINKS_STALE_AFTER = 7 * 24 * HOUR;
 /** "20261001083000 +0530" -> epoch ms. */
 export function parseXmltvTime(value) {
     const found = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})?\s*([+-])?(\d{2})?(\d{2})?/.exec(value.trim());
@@ -77,8 +85,10 @@ export function mapChannels(guide, channels, overrides = {}) {
     const index = buildIndex(guide);
     const feeds = new Map();
     const countries = new Map();
+    const guideCountries = new Set(guide.map((entry) => countryCode(entry.country)));
     let matched = 0;
     let noCountry = 0;
+    let uncovered = 0;
     for (const channel of channels) {
         const code = countryCode(channel.country);
         const tally = countries.get(code || "--") || countries.set(code || "--", { code: code || "--", channels: 0, matched: 0 }).get(code || "--");
@@ -93,8 +103,11 @@ export function mapChannels(guide, channels, overrides = {}) {
                 noCountry++;
             epgId = matchChannel(index, channel)?.id ?? null;
         }
-        if (!epgId)
+        if (!epgId) {
+            if (/^[A-Z]{2}$/.test(code) && !guideCountries.has(code))
+                uncovered++;
             continue;
+        }
         matched++;
         tally.matched++;
         (feeds.get(epgId) || feeds.set(epgId, []).get(epgId)).push(channel.id);
@@ -106,14 +119,112 @@ export function mapChannels(guide, channels, overrides = {}) {
             matched,
             unmatched: channels.length - matched,
             noCountry,
+            uncovered,
             countries: [...countries.values()].sort((a, b) => b.channels - a.channels)
         }
     };
+}
+/** The iptv-org id inside one of this plugin's channel ids, or "". */
+export function iptvOrgId(channelId) {
+    return channelId.startsWith("iptv:") ? channelId.slice(5) : "";
+}
+/** Overlaps (two listings of one slot) keep the first; a programme that
+ *  runs into the next is cut where the next begins. */
+function tidy(list) {
+    list.sort((a, b) => a.start - b.start);
+    for (let at = list.length - 1; at > 0; at--) {
+        if (list[at].start < list[at - 1].stop) {
+            if (list[at].start === list[at - 1].start)
+                list.splice(at, 1);
+            else
+                list[at - 1].stop = list[at].start;
+        }
+    }
+}
+/**
+ * One XMLTV file, read as it arrives: its channel list first (the head),
+ * then each programme, kept only when its channel feeds one of ours and it
+ * falls inside the window. Resolves with the kept schedules by OUR id.
+ */
+async function streamGuide(job) {
+    const answer = await job.fetcher(job.url, job.timeoutMs);
+    if (!answer.ok || !answer.body)
+        throw new Error(`HTTP ${answer.status}`);
+    const body = answer.body;
+    const gunzip = createGunzip();
+    const decoder = new StringDecoder("utf8");
+    const kept = new Map();
+    let feeds = new Map();
+    let buffer = "";
+    let head = "";
+    let inProgrammes = false;
+    let guideChannels = 0;
+    let programmes = 0;
+    await new Promise((resolve, reject) => {
+        const fail = (error) => {
+            body.destroy();
+            gunzip.destroy();
+            reject(error);
+        };
+        gunzip.on("data", (chunk) => {
+            if (job.halted()) {
+                fail(new Error("stopped"));
+                return;
+            }
+            buffer += decoder.write(chunk);
+            if (!inProgrammes) {
+                const first = buffer.indexOf("<programme");
+                if (first < 0) {
+                    /* Still in the channel list: keep whole entries only. */
+                    const cut = buffer.lastIndexOf("</channel>");
+                    if (cut >= 0) {
+                        head += buffer.slice(0, cut + 10);
+                        buffer = buffer.slice(cut + 10);
+                    }
+                    return;
+                }
+                head += buffer.slice(0, first);
+                buffer = buffer.slice(first);
+                inProgrammes = true;
+                const guide = parseDirectory(head);
+                guideChannels = guide.length;
+                feeds = job.resolve(guide);
+                head = "";
+            }
+            let from = 0;
+            for (;;) {
+                const end = buffer.indexOf("</programme>", from);
+                if (end < 0)
+                    break;
+                const block = buffer.slice(from, end + 12);
+                from = end + 12;
+                /* Cheap check before any parsing: is it one of ours? */
+                const raw = /channel="([^"]*)"/.exec(block)?.[1];
+                const id = raw && raw.includes("&") ? unescapeXml(raw) : raw;
+                if (!id || !feeds.has(id))
+                    continue;
+                const parsed = parseProgramme(block);
+                if (!parsed || parsed.programme.stop < job.keepFrom || parsed.programme.start > job.keepTo)
+                    continue;
+                for (const channelId of feeds.get(id)) {
+                    (kept.get(channelId) || kept.set(channelId, []).get(channelId)).push({ ...parsed.programme });
+                }
+                programmes++;
+            }
+            buffer = buffer.slice(from);
+        });
+        gunzip.on("end", () => resolve());
+        gunzip.on("error", fail);
+        body.on("error", fail);
+        body.pipe(gunzip);
+    });
+    return { guideChannels, kept, programmes };
 }
 export class BulkGuide {
     options;
     schedules = new Map();
     state = null;
+    linkTable = null;
     running = null;
     timer = null;
     halted = false;
@@ -136,6 +247,12 @@ export class BulkGuide {
     }
     status() {
         return this.state;
+    }
+    /** The sites with a per-channel API that iptv-org links this channel
+     *  to (`epg-sites.ts`); none until iptv-org's mapping has been read. */
+    siteLinksFor(channelId) {
+        const id = iptvOrgId(channelId);
+        return (id && this.linkTable?.dynamic?.[id]) || [];
     }
     isRunning() {
         return Boolean(this.running);
@@ -184,110 +301,165 @@ export class BulkGuide {
             return {};
         }
     }
+    /** iptv-org's guide mapping: from disk when under a week old, else
+     *  fetched; an old copy is better than none when the fetch fails. */
+    async links() {
+        /* A table written before per-channel sites existed has no `dynamic`. */
+        if (this.linkTable?.dynamic && this.now() - this.linkTable.fetchedAt < LINKS_STALE_AFTER)
+            return this.linkTable;
+        try {
+            const answer = await this.options.fetcher(GUIDES_URL, 2 * 60_000);
+            if (!answer.ok)
+                throw new Error(`HTTP ${answer.status}`);
+            const table = buildLinks(JSON.parse(await answer.text()), this.now());
+            if (!Object.keys(table.links).length)
+                throw new Error("no usable rows");
+            this.linkTable = table;
+            this.writeLinks();
+        }
+        catch (error) {
+            this.log(`[epg] iptv-org guide mapping: ${error.message}${this.linkTable ? " (using the old copy)" : ""}`);
+        }
+        return this.linkTable;
+    }
     async run() {
         const began = this.now();
         const channels = await this.options.channels();
         const keepFrom = began - KEEP_BEFORE;
         const keepTo = began + KEEP_AFTER;
-        const kept = new Map();
-        let feeds = new Map();
-        let counts = null;
+        const idCandidates = new Map();
+        const byChannel = new Map(channels.map((channel) => [channel.id, channel]));
+        const overrides = this.overrides();
+        const nameKept = new Map();
+        let nameCounts = null;
         let guideChannels = 0;
         let programmes = 0;
+        let sourcesOk = 0;
+        let sourcesFailed = 0;
         try {
-            /* Ten minutes: it is a 50 MB download, read as it arrives. */
-            const answer = await this.options.fetcher(GUIDE_URL, 10 * 60_000);
-            if (!answer.ok || !answer.body)
-                throw new Error(`HTTP ${answer.status}`);
-            const body = answer.body;
-            const gunzip = createGunzip();
-            const decoder = new StringDecoder("utf8");
-            let buffer = "";
-            let head = "";
-            let inProgrammes = false;
-            await new Promise((resolve, reject) => {
-                const fail = (error) => {
-                    body.destroy();
-                    gunzip.destroy();
-                    reject(error);
-                };
-                gunzip.on("data", (chunk) => {
-                    if (this.halted) {
-                        fail(new Error("stopped"));
-                        return;
-                    }
-                    buffer += decoder.write(chunk);
-                    if (!inProgrammes) {
-                        const first = buffer.indexOf("<programme");
-                        if (first < 0) {
-                            /* Still in the channel list: keep whole entries only. */
-                            const cut = buffer.lastIndexOf("</channel>");
-                            if (cut >= 0) {
-                                head += buffer.slice(0, cut + 10);
-                                buffer = buffer.slice(cut + 10);
-                            }
-                            return;
-                        }
-                        head += buffer.slice(0, first);
-                        buffer = buffer.slice(first);
-                        inProgrammes = true;
-                        const guide = parseDirectory(head);
-                        guideChannels = guide.length;
-                        const mapped = mapChannels(guide, channels, this.overrides());
-                        feeds = mapped.feeds;
-                        counts = mapped.status;
-                        head = "";
-                    }
-                    let from = 0;
-                    for (;;) {
-                        const end = buffer.indexOf("</programme>", from);
-                        if (end < 0)
-                            break;
-                        const block = buffer.slice(from, end + 12);
-                        from = end + 12;
-                        /* Cheap check before any parsing: is it one of ours? */
-                        const id = /channel="([^"]*)"/.exec(block)?.[1];
-                        if (!id || !feeds.has(id))
-                            continue;
-                        const parsed = parseProgramme(block);
-                        if (!parsed || parsed.programme.stop < keepFrom || parsed.programme.start > keepTo)
-                            continue;
-                        for (const channelId of feeds.get(id)) {
-                            (kept.get(channelId) || kept.set(channelId, []).get(channelId)).push(parsed.programme);
-                        }
-                        programmes++;
-                    }
-                    buffer = buffer.slice(from);
-                });
-                gunzip.on("end", () => resolve());
-                gunzip.on("error", fail);
-                body.on("error", fail);
-                body.pipe(gunzip);
-            });
-            if (!counts)
-                throw new Error("the guide had no programmes");
-            for (const list of kept.values()) {
-                list.sort((a, b) => a.start - b.start);
-                /* Overlaps (two listings of one slot) keep the first. */
-                for (let at = list.length - 1; at > 0; at--) {
-                    if (list[at].start < list[at - 1].stop) {
-                        if (list[at].start === list[at - 1].start)
-                            list.splice(at, 1);
-                        else
-                            list[at - 1].stop = list[at].start;
+            /* TIER 1: by iptv-org id, one file at a time. */
+            const table = channels.some((channel) => iptvOrgId(channel.id)) ? await this.links() : null;
+            const perFile = new Map();
+            if (table) {
+                for (const channel of channels) {
+                    /* A hand-made pin or block outranks the mapping. */
+                    if (Object.prototype.hasOwnProperty.call(overrides, channel.id))
+                        continue;
+                    for (const link of table.links[iptvOrgId(channel.id)] || []) {
+                        const file = perFile.get(link.url) || perFile.set(link.url, new Map()).get(link.url);
+                        (file.get(link.channel) || file.set(link.channel, []).get(link.channel)).push(channel.id);
                     }
                 }
             }
-            this.schedules = kept;
+            for (const [url, feeds] of perFile) {
+                if (this.halted)
+                    throw new Error("stopped");
+                try {
+                    const got = await streamGuide({
+                        fetcher: this.options.fetcher,
+                        url,
+                        resolve: () => feeds,
+                        keepFrom,
+                        keepTo,
+                        halted: () => this.halted,
+                        timeoutMs: 10 * 60_000
+                    });
+                    sourcesOk++;
+                    guideChannels += got.guideChannels;
+                    programmes += got.programmes;
+                    for (const [channelId, list] of got.kept) {
+                        (idCandidates.get(channelId) || idCandidates.set(channelId, []).get(channelId)).push({ url, list });
+                    }
+                }
+                catch (error) {
+                    if (error.message === "stopped")
+                        throw error;
+                    sourcesFailed++;
+                    this.log(`[epg] ${url}: ${error.message}`);
+                }
+            }
+            /* TIER 2: by name, epg.pw's whole guide. */
+            const named = await streamGuide({
+                fetcher: this.options.fetcher,
+                url: GUIDE_URL,
+                resolve: (guide) => {
+                    const mapped = mapChannels(guide, channels, overrides);
+                    nameCounts = mapped.status;
+                    return mapped.feeds;
+                },
+                keepFrom,
+                keepTo,
+                halted: () => this.halted,
+                /* Ten minutes: it is a 50 MB download, read as it arrives. */
+                timeoutMs: 10 * 60_000
+            });
+            if (!nameCounts)
+                throw new Error("the guide had no programmes");
+            guideChannels += named.guideChannels;
+            programmes += named.programmes;
+            for (const [channelId, list] of named.kept)
+                nameKept.set(channelId, list);
+            /* Merge: the ID-matched schedule that covers the most of the
+               window wins; a channel with none falls back to its name match. */
+            const schedules = new Map();
+            let byId = 0;
+            for (const [channelId, candidates] of idCandidates) {
+                const code = countryCode(byChannel.get(channelId)?.country || "").toLowerCase();
+                const live = (list) => list.filter((programme) => programme.stop > began).length;
+                /* The same channel can be in several REGIONAL files (Plex/gb,
+                   Plex/us): the file of the channel's own country first, then
+                   the one that covers the most of the window. */
+                const ours = (url) => (code && new RegExp(`/${code}(\\.xml|/)`).test(url) ? 0 : 1);
+                const best = candidates
+                    .filter((candidate) => live(candidate.list))
+                    .sort((a, b) => ours(a.url) - ours(b.url) || live(b.list) - live(a.list))[0];
+                if (best) {
+                    tidy(best.list);
+                    schedules.set(channelId, best.list);
+                    byId++;
+                }
+            }
+            for (const [channelId, list] of nameKept) {
+                if (schedules.has(channelId))
+                    continue;
+                tidy(list);
+                schedules.set(channelId, list);
+            }
+            const counts = nameCounts;
+            const tally = new Map(counts.countries.map((country) => [country.code, { ...country }]));
+            const nameMatched = new Set();
+            /* "Matched" is any channel with a schedule, by either tier. */
+            let matched = counts.matched;
+            for (const channel of channels)
+                if (nameKept.has(channel.id))
+                    nameMatched.add(channel.id);
+            for (const channelId of schedules.keys()) {
+                if (nameMatched.has(channelId))
+                    continue;
+                const channel = byChannel.get(channelId);
+                if (!channel)
+                    continue;
+                matched++;
+                const code = countryCode(channel.country) || "--";
+                const row = tally.get(code);
+                if (row)
+                    row.matched++;
+            }
+            this.schedules = schedules;
             this.state = {
                 at: this.now(),
                 ok: true,
                 seconds: Math.round((this.now() - began) / 1000),
                 guideChannels,
                 programmes,
-                ...counts
+                ...counts,
+                matched,
+                unmatched: counts.channels - matched,
+                byId,
+                sources: { ok: sourcesOk, failed: sourcesFailed },
+                countries: [...tally.values()].sort((a, b) => b.channels - a.channels)
             };
-            this.log(`[epg] guide: ${this.state.matched}/${this.state.channels} channels matched, ${programmes} programmes, ${this.state.seconds}s`);
+            this.log(`[epg] guide: ${matched}/${counts.channels} channels matched (${byId} by id), ${programmes} programmes, ${this.state.seconds}s`);
         }
         catch (error) {
             const message = error.message;
@@ -313,15 +485,39 @@ export class BulkGuide {
     }
     read() {
         const file = this.options.file;
-        if (!file || !existsSync(file))
+        if (file && existsSync(file)) {
+            try {
+                const stored = JSON.parse(readFileSync(file, "utf8"));
+                this.state = stored.status || null;
+                this.schedules = new Map(Object.entries(stored.schedules || {}));
+            }
+            catch (error) {
+                this.log(`[epg] could not read ${file}: ${error.message}`);
+            }
+        }
+        const linksFile = this.options.linksFile;
+        if (linksFile && existsSync(linksFile)) {
+            try {
+                const stored = JSON.parse(readFileSync(linksFile, "utf8"));
+                if (stored && typeof stored.fetchedAt === "number" && stored.links && typeof stored.links === "object")
+                    this.linkTable = stored;
+            }
+            catch {
+                /* Fetched again on the next run. */
+            }
+        }
+    }
+    writeLinks() {
+        const file = this.options.linksFile;
+        if (!file || !this.linkTable)
             return;
         try {
-            const stored = JSON.parse(readFileSync(file, "utf8"));
-            this.state = stored.status || null;
-            this.schedules = new Map(Object.entries(stored.schedules || {}));
+            mkdirSync(dirname(file), { recursive: true });
+            writeFileSync(`${file}.tmp`, JSON.stringify(this.linkTable));
+            renameSync(`${file}.tmp`, file);
         }
         catch (error) {
-            this.log(`[epg] could not read ${file}: ${error.message}`);
+            this.log(`[epg] could not write ${file}: ${error.message}`);
         }
     }
     write() {
