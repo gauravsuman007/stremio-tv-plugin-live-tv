@@ -14,7 +14,7 @@
 import { setHost } from "./host.js";
 import { initPluginConfig } from "./plugin-config.js";
 import { chrome, escape, page, setLogoSwap } from "./render.js";
-import { channelIndex, channelMeta, regionChips, channelStreamList, allChannelsRanked, channelsIn, codecFor, countries, countryNamed, findChannel, forgetChannels, expireScraperResult, stopChannelRefresh, isChannelId, liveRails, loadChecks, rankReachability, runScraperNow, searchChannels, flushChecks } from "./channels.js";
+import { channelIndex, channelMeta, regionChips, channelStreamList, allChannelsRanked, channelsIn, codecFor, sourceNameOf, countries, countryNamed, findChannel, forgetChannels, expireScraperResult, stopChannelRefresh, isChannelId, liveRails, loadChecks, rankReachability, runScraperNow, searchChannels, flushChecks } from "./channels.js";
 import { channelSearchPage, livePage } from "./pages/tv.js";
 import { browsePage, worldPage } from "./pages/browse.js";
 import { arrange, moved, railsPage, visibleRails } from "./pages/rails.js";
@@ -31,6 +31,7 @@ import { GuideStore, defaultFetcher, nowLine } from "./epg.js";
 import { warmSites } from "./epg-sites.js";
 import { BulkGuide } from "./epg-bulk.js";
 import { LogoStore } from "./logos.js";
+import { liveStreamColumn } from "./stream-column.js";
 import { zoneForCountry } from "./timezones.js";
 import { existsSync as fileExists, readFileSync as readFile, writeFileSync as writeFile } from "node:fs";
 import { pluginConfig } from "./plugin-config.js";
@@ -623,7 +624,7 @@ const createPlugin = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.13.1",
+        version: "1.14.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
@@ -636,6 +637,7 @@ const createPlugin = (host, configDir) => {
             logos.stop();
         },
         routes: () => routes,
+        streamColumn: (input) => liveStreamColumn(input, (url) => codecFor(url), sourceNameOf),
         ownsContentId: (type, id) => type === "tv" && isChannelId(id),
         async metaFor(type, id) {
             if (!(type === "tv" && isChannelId(id)))
