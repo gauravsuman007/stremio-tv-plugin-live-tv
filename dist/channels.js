@@ -50,7 +50,8 @@ import { dirname } from "node:path";
 import { spawn } from "node:child_process";
 import { pluginConfig as config } from "./plugin-config.js";
 import { host } from "./host.js";
-import { relayAvailable } from "./relay-support.js";
+import { relayAvailable, resolverAvailable } from "./relay-support.js";
+import { aimOf } from "./resolve.js";
 import { genreLabel, genreOf, languageLabel, languagesOf } from "./taxonomy.js";
 import { allScrapers, beginScraperRun, endScraperRun, lastRun, recordRun, scraperEnabled, scraperStopRequested } from "./scrapers.js";
 const fetchVia = (url, options) => host.fetchVia(url, options);
@@ -295,7 +296,15 @@ async function fromScraper(byId, flagOf, rails) {
                 list looking like any other mirror and hand the player a
                 picture instead of video.
             */
-            const playable = channel.streams.filter((stream) => !stream.decoder || (relayAvailable() && typeof scraper.decoders?.[stream.decoder] === "function"));
+            /*
+                The same goes for a mirror that names a RESOLVER: its `url`
+                is a handle that goes nowhere on its own, and it needs the
+                relay as much as a decoder does (it is the relay that
+                resolves it for the player), and a core that knows never to
+                hand it to the television directly (API 1.5.0).
+            */
+            const playable = channel.streams.filter((stream) => (!stream.decoder || (relayAvailable() && typeof scraper.decoders?.[stream.decoder] === "function")) &&
+                (!stream.resolver || (resolverAvailable() && typeof scraper.resolvers?.[stream.resolver] === "function")));
             if (!playable.length)
                 continue;
             const taggedStreams = playable.map((stream) => ({
@@ -955,11 +964,19 @@ export async function verify(stream, proxy = "") {
         return already;
     let ok = false;
     try {
-        const upstream = await fetchVia(stream.url, {
+        /*
+            A mirror with a resolver is asked for where it is NOW. The
+            answer is stored under the handle either way, so it survives
+            the address changing.
+        */
+        const aim = await aimOf(stream);
+        if (!aim)
+            throw new Error("unresolvable");
+        const upstream = await fetchVia(aim.url, {
             proxy,
             headers: {
-                "user-agent": stream.userAgent || "VLC/3.0.20 LibVLC/3.0.20",
-                ...(stream.referrer ? { referer: stream.referrer } : {})
+                "user-agent": aim.userAgent || "VLC/3.0.20 LibVLC/3.0.20",
+                ...(aim.referrer ? { referer: aim.referrer } : {})
             },
             timeoutMs: CHECK_MS
         });
@@ -1220,17 +1237,22 @@ function askFfprobe(data) {
  */
 export async function probeCodec(stream, proxy = "") {
     try {
-        const top = await taste(stream.url, stream, proxy, 64 * 1024);
+        /* Where this mirror is NOW: its own address, or a resolver's answer (`resolve.ts`). */
+        const aim = await aimOf(stream);
+        if (!aim)
+            return null;
+        const live = { ...stream, url: aim.url, referrer: aim.referrer, userAgent: aim.userAgent };
+        const top = await taste(live.url, live, proxy, 64 * 1024);
         if (top.status >= 400 || !top.text.trimStart().startsWith("#EXTM3U"))
             return null;
-        const first = urisIn(top.text, stream.url);
+        const first = urisIn(top.text, live.url);
         let list = null;
         if (first.variants.length === 0) {
-            list = { url: stream.url, text: top.text };
+            list = { url: live.url, text: top.text };
         }
         else {
             for (const variant of first.variants.slice(0, VARIANTS)) {
-                const inner = await taste(variant, stream, proxy, 64 * 1024);
+                const inner = await taste(variant, live, proxy, 64 * 1024);
                 if (inner.status < 400 && inner.text.trimStart().startsWith("#EXTM3U")) {
                     list = { url: variant, text: inner.text };
                     break;
@@ -1251,7 +1273,7 @@ export async function probeCodec(stream, proxy = "") {
         const decode = stream.decoder
             ? allScrapers().find((entry) => entry.id === stream.source)?.decoders?.[stream.decoder]
             : undefined;
-        const got = await taste(segment, stream, proxy, decode ? 64 * 1024 * 1024 : PROBE_BYTES, true);
+        const got = await taste(segment, live, proxy, decode ? 64 * 1024 * 1024 : PROBE_BYTES, true);
         if (got.status >= 400 || got.bytes < 32 * 1024)
             return null;
         /* A mirror that needs its decoder and has none here is not probed: the raw segment says nothing about the video. */
@@ -1286,12 +1308,17 @@ export async function probeCodec(stream, proxy = "") {
 export async function deepVerify(stream, proxy = "") {
     let ok = false;
     try {
-        const top = await taste(stream.url, stream, proxy, 64 * 1024);
+        /* Where this mirror is NOW: its own address, or a resolver's answer (`resolve.ts`). */
+        const aim = await aimOf(stream);
+        if (!aim)
+            throw new Error("unresolvable");
+        const live = { ...stream, url: aim.url, referrer: aim.referrer, userAgent: aim.userAgent };
+        const top = await taste(live.url, live, proxy, 64 * 1024);
         if (top.status < 400 && top.text.trimStart().startsWith("#EXTM3U")) {
-            const first = urisIn(top.text, stream.url);
+            const first = urisIn(top.text, live.url);
             const lists = [];
             if (first.variants.length === 0) {
-                lists.push({ url: stream.url, text: top.text });
+                lists.push({ url: live.url, text: top.text });
             }
             else {
                 /*
@@ -1304,7 +1331,7 @@ export async function deepVerify(stream, proxy = "") {
                     television does not have.
                 */
                 for (const variant of first.variants.slice(0, VARIANTS)) {
-                    const inner = await taste(variant, stream, proxy, 64 * 1024);
+                    const inner = await taste(variant, live, proxy, 64 * 1024);
                     if (inner.status < 400 && inner.text.trimStart().startsWith("#EXTM3U")) {
                         lists.push({ url: variant, text: inner.text });
                         break;
@@ -1315,7 +1342,7 @@ export async function deepVerify(stream, proxy = "") {
                 const segment = urisIn(list.text, list.url).segments[0];
                 if (!segment)
                     continue;
-                const got = await taste(segment, stream, proxy, SEGMENT_BYTES);
+                const got = await taste(segment, live, proxy, SEGMENT_BYTES);
                 /*
                     Bytes, and not an error page wearing a 200. An HLS
                     segment is MPEG-TS or fragmented MP4; neither begins

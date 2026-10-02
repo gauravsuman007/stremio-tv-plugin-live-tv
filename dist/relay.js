@@ -43,6 +43,7 @@ import { Readable } from "node:stream";
 import { host } from "./host.js";
 import { channelIndex } from "./channels.js";
 import { allScrapers } from "./scrapers.js";
+import { aimOf } from "./resolve.js";
 /** The same default core sends, so a stream that only needed a Referer
  *  is not also handed a different User-Agent than everything else. */
 const DEFAULT_UA = "VLC/3.0.20 LibVLC/3.0.20";
@@ -62,13 +63,14 @@ const PEEK = 8 * 1024;
 const rules = new Map();
 /** Whether this mirror needs the relay at all. Most do not. */
 export function needsRelay(stream) {
-    return Boolean(stream.referrer || stream.userAgent || stream.decoder);
+    return Boolean(stream.referrer || stream.userAgent || stream.decoder || stream.resolver);
 }
 function ruleOf(stream) {
     return {
         referrer: stream.referrer,
         userAgent: stream.userAgent,
         decoder: stream.decoder ? { scraper: stream.source, name: stream.decoder } : undefined,
+        resolve: stream.resolver ? { handle: stream.url, resolver: stream.resolver, source: stream.source } : undefined,
         at: Date.now()
     };
 }
@@ -191,10 +193,31 @@ function answer(status, url, type, body) {
  * for -- which is nearly all of them.
  */
 export async function liveFetch(url, options) {
-    const rule = await ruleFor(url);
-    if (!rule)
+    const found = await ruleFor(url);
+    if (!found)
         return null;
-    const upstream = await host.fetchVia(url, {
+    /*
+        A HANDLE IS RESOLVED HERE, and nowhere earlier, so what is fetched is
+        the address as it is this second. Everything the playlist then names
+        gets the rule of the RESOLVED stream -- its headers, not the
+        handle's -- and none of it is itself a handle.
+    */
+    let rule = found;
+    let target = url;
+    if (found.resolve) {
+        const aim = await aimOf({
+            url: found.resolve.handle,
+            referrer: found.referrer,
+            userAgent: found.userAgent,
+            resolver: found.resolve.resolver,
+            source: found.resolve.source
+        });
+        if (!aim)
+            return answer(502, url, "text/plain", Buffer.from("This source could not be resolved right now."));
+        target = aim.url;
+        rule = { ...found, referrer: aim.referrer, userAgent: aim.userAgent, resolve: undefined };
+    }
+    const upstream = await host.fetchVia(target, {
         proxy: options.proxy,
         headers: {
             "user-agent": rule.userAgent || DEFAULT_UA,
@@ -226,7 +249,7 @@ export async function liveFetch(url, options) {
         }
         for (const uri of urisOf(whole.toString("utf8"), upstream.url))
             remember(uri, rule);
-        remember(url, rule);
+        remember(url, found);
         return answer(upstream.status, upstream.url, "application/vnd.apple.mpegurl", whole);
     }
     const decode = decoderFor(rule);
