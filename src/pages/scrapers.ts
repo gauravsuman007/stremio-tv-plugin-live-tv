@@ -102,7 +102,7 @@ function percent(part: number, whole: number): string {
 export function guideSection(client: Client, guide: GuidePanel): string {
     const status = guide.status;
     const fetched = guide.running
-        ? "Fetching the guide now&hellip;"
+        ? "Fetching the guide now&hellip; (reload this page to see the result)"
         : !status
           ? "Not fetched yet &mdash; the first fetch runs shortly after start."
           : status.ok
@@ -136,7 +136,7 @@ ${status.countries
 <p class="hint">Every 12 hours the guides are fetched in bulk and matched to the channels here. First by iptv-org&rsquo;s own channel id, against the guides iptv-org links (i.mjh.nz: Plex, Pluto, Samsung, Roku, PBS, Sky Go, Foxtel; epg.iptvx.one) &mdash; no names compared. Then, for a channel that left over, epg.pw by exact name and only ever within the channel&rsquo;s own country &mdash; never across countries.</p>
 <p class="hint">${fetched}</p>
 ${mapping}
-<form method="POST" action="${escape(client.link("/tv/scrapers/guide"))}" class="inline"><input type="hidden" name="refresh" value="1"><button class="step" type="submit"${guide.running ? " disabled" : ""}>Fetch the guide now</button></form>
+<form method="POST" action="${escape(client.link("/tv/scrapers/guide"))}" class="inline"><input type="hidden" name="refresh" value="1"><button class="step" type="submit"${guide.running ? " disabled" : ""}>${guide.running ? "Fetching&hellip;" : "Fetch EPG now"}</button>${guide.running ? ` <span class="hint">Takes about a minute &mdash; reload this page to see the result.</span>` : ""}</form>
 <h3 class="lead">Per-channel guide fetching</h3>
 <p class="hint">${dynamicNote}</p>
 <form method="POST" action="${escape(client.link("/tv/scrapers/guide"))}" class="inline"><input type="hidden" name="dynamic" value="${guide.dynamic ? "off" : "on"}"><button class="step" type="submit">${guide.dynamic ? "Switch off" : "Switch on"}</button></form>`;
