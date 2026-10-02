@@ -123,6 +123,10 @@ export interface Channel {
     streams: ChannelStream[];
     /** The composite described in the docstring. Never an audience figure. */
     score: number;
+    /** The raw ids of the channels from OTHER scrapers merged into this card
+     *  (it keeps the first scraper's id). The guide matches by an iptv-org
+     *  id, which may be only here. */
+    mergedIds?: string[];
 }
 
 export interface Country {
@@ -461,6 +465,7 @@ async function fromScraper(
                     existing.website,
                     existing.network
                 );
+                (existing.mergedIds || (existing.mergedIds = [])).push(channel.id);
                 mine.set(channel.id, existing.id);
                 kept += 1;
                 continue;

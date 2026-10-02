@@ -378,7 +378,9 @@ assert.equal(mapped.status.uncovered, 1, "PK: the guide has no channels for that
             { id: "iptv:Solo.us", name: "Solo", country: "US" },
             { id: "iptv:Pinned.us", name: "Pinned", country: "US" },
             { id: "iptv:Fallback.us", name: "Fallback", country: "US" },
-            { id: "live:other:1", name: "No Country", country: "" }
+            { id: "live:other:1", name: "No Country", country: "" },
+            /* A card that kept another scraper's id, with iptv-org's merged in. */
+            { id: "live:famelack:9", name: "Whatever Famelack Calls It", country: "US", mergedIds: ["live:vavoo:3", "iptv:Solo.us"] }
         ]
     });
 
@@ -391,8 +393,9 @@ assert.equal(mapped.status.uncovered, 1, "PK: the guide has no channels for that
     assert.equal(titles("iptv:Pinned.us"), null, "a hand-made block outranks the id mapping");
     assert.deepEqual(titles("iptv:Fallback.us"), ["Name Match"], "no id mapping: the guarded name match");
     assert.equal(titles("live:other:1"), null, "no country and no id: nothing");
-    assert.equal(bulkIds.status().byId, 2);
-    assert.equal(bulkIds.status().matched, 3);
+    assert.deepEqual(titles("live:famelack:9"), ["Solo Show"], "an iptv-org id merged into another scraper's card still matches");
+    assert.equal(bulkIds.status().byId, 3);
+    assert.equal(bulkIds.status().matched, 4);
     assert.deepEqual(bulkIds.status().sources, { ok: 3, failed: 0 });
 
     /* The mapping is kept for a week: a second run does not fetch it. */

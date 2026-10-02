@@ -198,9 +198,11 @@ interface BulkFile {
     schedules?: Record<string, Programme[]>;
 }
 
-/** The iptv-org id inside one of this plugin's channel ids, or "". */
-export function iptvOrgId(channelId: string): string {
-    return channelId.startsWith("iptv:") ? channelId.slice(5) : "";
+/** The iptv-org ids behind one of this plugin's channels: its own id when
+ *  iptv-org's scraper made it, and those of iptv-org channels merged into
+ *  it (a card keeps the id of whichever scraper came first). */
+export function iptvOrgIds(subject: { id: string; mergedIds?: string[] }): string[] {
+    return [subject.id, ...(subject.mergedIds || [])].filter((id) => id.startsWith("iptv:")).map((id) => id.slice(5));
 }
 
 /** Overlaps (two listings of one slot) keep the first; a programme that
@@ -363,10 +365,16 @@ export class BulkGuide {
 
     /** The sites with a per-channel API that iptv-org links this channel
      *  to (`epg-sites.ts`); none until iptv-org's mapping has been read. */
-    siteLinksFor(channelId: string): SiteLink[] {
-        const id = iptvOrgId(channelId);
+    siteLinksFor(subject: { id: string; mergedIds?: string[] }): SiteLink[] {
+        const found: SiteLink[] = [];
 
-        return (id && this.linkTable?.dynamic?.[id]) || [];
+        for (const id of iptvOrgIds(subject)) {
+            for (const link of this.linkTable?.dynamic?.[id] || []) {
+                if (!found.some((known) => known.site === link.site && known.siteId === link.siteId)) found.push(link);
+            }
+        }
+
+        return found;
     }
 
     isRunning(): boolean {
@@ -467,7 +475,7 @@ export class BulkGuide {
 
         try {
             /* TIER 1: by iptv-org id, one file at a time. */
-            const table = channels.some((channel) => iptvOrgId(channel.id)) ? await this.links() : null;
+            const table = channels.some((channel) => iptvOrgIds(channel).length) ? await this.links() : null;
             const perFile = new Map<string, Map<string, string[]>>();
 
             if (table) {
@@ -475,10 +483,13 @@ export class BulkGuide {
                     /* A hand-made pin or block outranks the mapping. */
                     if (Object.prototype.hasOwnProperty.call(overrides, channel.id)) continue;
 
-                    for (const link of table.links[iptvOrgId(channel.id)] || ([] as GuideLink[])) {
-                        const file = perFile.get(link.url) || perFile.set(link.url, new Map()).get(link.url)!;
+                    for (const iptvId of iptvOrgIds(channel)) {
+                        for (const link of table.links[iptvId] || ([] as GuideLink[])) {
+                            const file = perFile.get(link.url) || perFile.set(link.url, new Map()).get(link.url)!;
+                            const ours = file.get(link.channel) || file.set(link.channel, []).get(link.channel)!;
 
-                        (file.get(link.channel) || file.set(link.channel, []).get(link.channel)!).push(channel.id);
+                            if (!ours.includes(channel.id)) ours.push(channel.id);
+                        }
                     }
                 }
             }

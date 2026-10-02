@@ -112,6 +112,9 @@ export interface GuideSubject {
     country: string;
     /** ISO 639-3 codes of the channel's main feed, when known. */
     languages?: string[];
+    /** Raw ids of other scrapers' channels merged into this one: the
+     *  iptv-org id the guide matches by may be among them. */
+    mergedIds?: string[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -520,7 +523,7 @@ export interface GuideStoreOptions {
     lookup: (id: string) => Promise<GuideSubject | null>;
     /** The sites iptv-org says carry a channel, that have a per-channel API
      *  (`epg-sites.ts`): tried before the name match. */
-    siteLinks?: (id: string) => SiteLink[];
+    siteLinks?: (id: string) => Promise<SiteLink[]>;
     now?: () => number;
     log?: (line: string) => void;
 }
@@ -705,7 +708,7 @@ export class GuideStore {
     private async fromSites(channelId: string, now: number): Promise<{ id: string; programmes: Programme[] } | null> {
         if (Object.prototype.hasOwnProperty.call(this.overrides(), channelId)) return null;
 
-        for (const link of this.options.siteLinks?.(channelId) || []) {
+        for (const link of (await this.options.siteLinks?.(channelId)) || []) {
             try {
                 const programmes = await siteSchedule(link, now, this.fetcher);
 
