@@ -109,8 +109,15 @@ export function guideSection(client: Client, guide: GuidePanel): string {
             ? `Last fetched ${escape(since(status.at))}: ${status.programmes.toLocaleString("en")} programmes from ${status.guideChannels.toLocaleString("en")} guide channels, in ${status.seconds}s. Next fetch 12 hours after that.`
             : `Last fetch failed ${escape(since(status.at))}: ${escape(status.error || "unknown error")}. The schedules from the fetch before it are still in use.`;
     const mapping = status && status.channels
-        ? `<p class="hint"><strong>${status.matched.toLocaleString("en")}</strong> of ${status.channels.toLocaleString("en")} channels matched to a guide (${percent(status.matched, status.channels)}); <strong>${status.unmatched.toLocaleString("en")}</strong> could not be${
-              status.noCountry ? `, ${status.noCountry.toLocaleString("en")} of them because the channel has no country` : ""
+        ? `<p class="hint"><strong>${status.matched.toLocaleString("en")}</strong> of ${status.channels.toLocaleString("en")} channels matched to a guide (${percent(status.matched, status.channels)}${status.byId ? `, ${status.byId.toLocaleString("en")} of them by iptv-org id` : ""}${status.sources && status.sources.failed ? `; ${status.sources.failed} guide file${status.sources.failed === 1 ? "" : "s"} could not be read` : ""}); <strong>${status.unmatched.toLocaleString("en")}</strong> could not be matched${
+              status.noCountry || status.uncovered
+              ? ` (${[
+                    status.uncovered ? `${status.uncovered.toLocaleString("en")} are in a country the guide has no channels for` : "",
+                    status.noCountry ? `${status.noCountry.toLocaleString("en")} have no country` : ""
+                ]
+                    .filter(Boolean)
+                    .join(", ")}; the rest have no listing of that exact name)`
+              : ""
           }.</p>
 <ul class="rails">
 ${status.countries
@@ -122,11 +129,11 @@ ${status.countries
 </ul>`
         : "";
     const dynamicNote = guide.dynamic
-        ? `On: a channel the whole-guide fetch did not cover is looked up on its own when it is opened or played, and the last ${guide.warm || 0} such channels are refreshed every 12 hours.`
+        ? `On: a channel the whole-guide fetch did not cover is looked up on its own when it is opened or played (a page waits at most half a second for it; a slower answer is there the next time), and the last ${guide.warm || 0} such channels are refreshed every 12 hours.`
         : "Off: only the whole-guide fetch is used. Switch on to also look up a channel on its own when it is opened or played.";
 
     return `<h3 class="lead">Programme guide</h3>
-<p class="hint">The whole guide (epg.pw) is fetched every 12 hours and matched to every channel here by exact name, and only ever within the channel&rsquo;s own country &mdash; never across countries.</p>
+<p class="hint">Every 12 hours the guides are fetched in bulk and matched to the channels here. First by iptv-org&rsquo;s own channel id, against the guides iptv-org links (i.mjh.nz: Plex, Pluto, Samsung, Roku, PBS, Sky Go, Foxtel; epg.iptvx.one) &mdash; no names compared. Then, for a channel that left over, epg.pw by exact name and only ever within the channel&rsquo;s own country &mdash; never across countries.</p>
 <p class="hint">${fetched}</p>
 ${mapping}
 <form method="POST" action="${escape(client.link("/tv/scrapers/guide"))}" class="inline"><input type="hidden" name="refresh" value="1"><button class="step" type="submit"${guide.running ? " disabled" : ""}>Fetch the guide now</button></form>

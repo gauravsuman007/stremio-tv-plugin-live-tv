@@ -38,7 +38,11 @@ export const pluginConfig = {
     get epgGuide(): string {
         return base ? `${base}/epg-guide.json` : "";
     },
-    /** `{"dynamic": boolean}` -- per-channel guide fetching, off by default. */
+    /** iptv-org's guide mapping (which bulk guide carries which channel). */
+    get epgLinks(): string {
+        return base ? `${base}/epg-links.json` : "";
+    },
+    /** `{"dynamic": boolean}` -- per-channel guide fetching, on by default. */
     get epgSettings(): string {
         return base ? `${base}/epg-settings.json` : "";
     },

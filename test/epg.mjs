@@ -36,7 +36,15 @@ for (const [a, b] of [
     ["TV 2", "Channel 2"],
     ["Nick", "Nick Jr"],
     ["Zee TV", "Zee TV USA"],
-    ["Discovery", "Discovery Kids"]
+    ["Discovery", "Discovery Kids"],
+    /* A name's non-Latin part is part of its identity, never dropped. */
+    ["CGTN", "CGTN纪录"],
+    ["BRIDGE", "Bridge TV Шлягер"],
+    ["RT", "RT Д Русский"],
+    ["MOMO TV", "MOMO親子台"],
+    /* A 4K/8K channel is often a channel of its own. */
+    ["CCTV-4K", "CCTV"],
+    ["BBC One 4K", "BBC One"]
 ]) {
     assert.notEqual(epgKey(a), epgKey(b), `${a} must not match ${b}`);
 }
@@ -70,6 +78,49 @@ assert.equal(match("Colors", ""), null, "no country, and the name exists in two:
 assert.equal(match("Unique Planet", ""), null, "no country: never matched, even when the name is unique");
 assert.equal(match("Unique Planet", "CA"), null, "and never across countries");
 assert.equal(match("Star Sports 1", "PK"), null, "a different country never matches");
+
+/* ---- the rules that keep a wrong guide out ---- */
+
+{
+    const rules = buildIndex([
+        { id: "1", name: "CGTN纪录", country: "CN" },
+        { id: "2", name: "CCTV-1 综合", country: "CN" },
+        { id: "3", name: "CCTV怀旧剧场", country: "CN" },
+        { id: "4", name: "CCTV-5+ 体育赛事", country: "CN" },
+        { id: "5", name: "Universal Channel", country: "BR" },
+        { id: "6", name: "HIT TV", country: "RU" },
+        { id: "7", name: "Hit", country: "RU" },
+        { id: "8", name: "SAAM", country: "IN" },
+        { id: "9", name: "NATIONAL GEOGRAPHIC", country: "IN" },
+        { id: "10", name: "STAR SPORTS 1 HINDI", country: "IN" },
+        { id: "11", name: "Roar TV", country: "US" },
+        { id: "12", name: "Bridge TV Шлягер", country: "RU" }
+    ]);
+    const rule = (name, country, languages) => matchChannel(rules, { id: "x", name, country, languages })?.id ?? null;
+
+    assert.equal(rule("CGTN", "CN"), null, "a different channel's listing (CGTN Documentary) is not CGTN");
+    assert.equal(rule("BRIDGE", "RU"), null, "nor is a Cyrillic-named sibling");
+    assert.equal(rule("CCTV-1", "CN"), "2", "a NUMBERED channel with a CJK descriptor is that channel");
+    assert.equal(rule("CCTV-5+", "CN"), "4");
+    assert.equal(rule("CCTV-8K", "CN"), null, "and a descriptor-only listing is not a number match");
+    assert.equal(rule("TV Universal", "BR"), null, "a leading TV is part of the name: not 'Universal Channel'");
+    assert.equal(rule("Hit", "RU"), "7", "an exact listing is taken");
+    assert.equal(rule("Hit TV", "RU"), "6", "an exact listing is taken");
+    assert.equal(rule("Saam TV", "IN"), "8", "a trailing TV is ignored, in the second pass");
+    assert.equal(rule("Roar", "US"), "11");
+    assert.equal(rule("Hit Network", "RU"), null);
+    assert.equal(rule("National Geographic", "IN", ["eng"]), "9");
+    assert.equal(rule("National Geographic", "IN", ["eng", "hin", "kan", "tam"]), null, "a pan-regional feed has no single schedule");
+    assert.equal(rule("Star Sports 1 Hindi", "IN", ["hin", "eng", "tam"]), "10", "unless its own name says which language");
+
+    /* Two listings that differ by more than "TV" are two channels: no pick. */
+    const clash = buildIndex([
+        { id: "20", name: "Zing", country: "IN" },
+        { id: "21", name: "Zing TV", country: "IN" }
+    ]);
+    assert.equal(matchChannel(clash, { id: "x", name: "Zing Channel", country: "IN" }), null);
+    assert.equal(matchChannel(clash, { id: "x", name: "Zing", country: "IN" })?.id, "20");
+}
 
 /* ---- the directory ---- */
 
@@ -227,6 +278,7 @@ assert.equal(mapped.status.matched, 2);
 assert.equal(mapped.status.unmatched, 2);
 assert.equal(mapped.status.noCountry, 1);
 assert.deepEqual(mapped.status.countries.find((c) => c.code === "PK"), { code: "PK", channels: 1, matched: 0 });
+assert.equal(mapped.status.uncovered, 1, "PK: the guide has no channels for that country at all");
 
 {
     const at = Date.parse("2026-10-01T12:00:00Z");
@@ -267,6 +319,89 @@ assert.deepEqual(mapped.status.countries.find((c) => c.code === "PK"), { code: "
     assert.deepEqual(reread.programmesFor("uk").map((p) => p.title), ["UK Show"], "and keeps the schedules already held");
 }
 
+/* ---- tier 1: by iptv-org's own id, tier 2: by name ---- */
+
+{
+    const { buildLinks, guideLink } = await import("../dist/epg-ids.js");
+
+    assert.deepEqual(guideLink("epg.iptvx.one", "1-2"), { url: "https://epg.iptvx.one/epg.xml.gz", channel: "1-2" });
+    assert.deepEqual(guideLink("i.mjh.nz", "Plex/gb#abc-def"), { url: "https://i.mjh.nz/Plex/gb.xml.gz", channel: "abc-def" });
+    assert.equal(guideLink("i.mjh.nz", "../etc#x"), null, "a path cannot climb out of the host");
+    assert.equal(guideLink("i.mjh.nz", "no-hash"), null);
+    assert.equal(guideLink("tataplay.com", "137"), null, "a per-channel scraper has no bulk file");
+
+    const table = buildLinks([
+        { channel: "Quest.uk", feed: "SD", site: "i.mjh.nz", site_id: "Plex/us#q-us" },
+        { channel: "Quest.uk", feed: "SD", site: "i.mjh.nz", site_id: "Plex/gb#q-gb" },
+        { channel: "Quest.uk", feed: "SD", site: "tataplay.com", site_id: "5" },
+        { channel: null, site: "i.mjh.nz", site_id: "Plex/gb#orphan" }
+    ]);
+    assert.deepEqual(Object.keys(table.links), ["Quest.uk"]);
+    assert.equal(table.links["Quest.uk"].length, 2);
+
+    const at = Date.parse("2026-10-01T12:00:00Z");
+    const prog = (channel, start, stop, title) =>
+        `<programme channel="${channel}" start="${start} +0000" stop="${stop} +0000"><title>${title}</title></programme>`;
+    const files = {
+        "https://iptv-org.github.io/api/guides.json": JSON.stringify([
+            { channel: "Quest.uk", site: "i.mjh.nz", site_id: "Plex/us#q-us" },
+            { channel: "Quest.uk", site: "i.mjh.nz", site_id: "Plex/gb#q-gb" },
+            { channel: "Solo.us", site: "epg.iptvx.one", site_id: "solo" },
+            { channel: "Pinned.us", site: "epg.iptvx.one", site_id: "pinned" }
+        ]),
+        "https://i.mjh.nz/Plex/us.xml.gz": `<tv><channel id="q-us"><display-name>Quest</display-name></channel>${prog("q-us", "20261001110000", "20261001150000", "US Quest A")}${prog("q-us", "20261001150000", "20261001190000", "US Quest B")}${prog("q-us", "20261001190000", "20261001230000", "US Quest C")}</tv>`,
+        "https://i.mjh.nz/Plex/gb.xml.gz": `<tv><channel id="q-gb"><display-name>Quest</display-name></channel>${prog("q-gb", "20261001110000", "20261001150000", "UK Quest")}</tv>`,
+        "https://epg.iptvx.one/epg.xml.gz": `<tv><channel id="solo"><display-name>Solo</display-name></channel><channel id="pinned"><display-name>P</display-name></channel>${prog("solo", "20261001110000", "20261001150000", "Solo Show")}${prog("pinned", "20261001110000", "20261001150000", "Wrong")}</tv>`,
+        "https://epg.pw/xmltv/epg.xml.gz": `<tv><channel id="1"><display-name lang="US">Fallback</display-name></channel><channel id="2"><display-name lang="US">Solo</display-name></channel>${prog("1", "20261001110000", "20261001150000", "Name Match")}${prog("2", "20261001110000", "20261001150000", "Name Solo")}</tv>`
+    };
+    const seen = [];
+    const dirIds = mkdtempSync(join(tmpdir(), "epg-ids-"));
+    writeFileSync(join(dirIds, "overrides.json"), JSON.stringify({ "iptv:Pinned.us": null }));
+
+    const bulkIds = new BulkGuide({
+        file: join(dirIds, "guide.json"),
+        linksFile: join(dirIds, "links.json"),
+        overridesFile: join(dirIds, "overrides.json"),
+        now: () => at,
+        fetcher: async (url) => {
+            seen.push(url);
+            const body = files[url];
+
+            if (body === undefined) return { ok: false, status: 404, body: null, text: async () => "" };
+
+            return url.endsWith(".gz")
+                ? { ok: true, status: 200, body: Readable.from(gzipChunks(body)), text: async () => "" }
+                : { ok: true, status: 200, body: null, text: async () => body };
+        },
+        channels: async () => [
+            { id: "iptv:Quest.uk", name: "Quest", country: "UK" },
+            { id: "iptv:Solo.us", name: "Solo", country: "US" },
+            { id: "iptv:Pinned.us", name: "Pinned", country: "US" },
+            { id: "iptv:Fallback.us", name: "Fallback", country: "US" },
+            { id: "live:other:1", name: "No Country", country: "" }
+        ]
+    });
+
+    await bulkIds.refresh();
+    const titles = (id) => bulkIds.programmesFor(id)?.map((p) => p.title) ?? null;
+
+    assert.ok(bulkIds.status().ok, bulkIds.status().error);
+    assert.deepEqual(titles("iptv:Quest.uk"), ["UK Quest"], "the file of the channel's own country wins over a fuller foreign one");
+    assert.deepEqual(titles("iptv:Solo.us"), ["Solo Show"], "an id match beats a name match");
+    assert.equal(titles("iptv:Pinned.us"), null, "a hand-made block outranks the id mapping");
+    assert.deepEqual(titles("iptv:Fallback.us"), ["Name Match"], "no id mapping: the guarded name match");
+    assert.equal(titles("live:other:1"), null, "no country and no id: nothing");
+    assert.equal(bulkIds.status().byId, 2);
+    assert.equal(bulkIds.status().matched, 3);
+    assert.deepEqual(bulkIds.status().sources, { ok: 3, failed: 0 });
+
+    /* The mapping is kept for a week: a second run does not fetch it. */
+    seen.length = 0;
+    await bulkIds.refresh();
+    assert.ok(!seen.includes("https://iptv-org.github.io/api/guides.json"), "guides.json is read at most weekly");
+    assert.ok(JSON.parse(readFileSync(join(dirIds, "links.json"), "utf8")).links["Solo.us"], "and it is persisted");
+}
+
 function gzipChunks(text) {
     const zipped = gzipSync(Buffer.from(text));
     const out = [];
@@ -274,6 +409,140 @@ function gzipChunks(text) {
     for (let at = 0; at < zipped.length; at += 37) out.push(zipped.subarray(at, at + 37));
 
     return out;
+}
+
+
+/* ---- per-channel sites: Airtel Xstream, Dish TV ---- */
+
+{
+    const { dishTime, siteSchedule, isSiteProvider } = await import("../dist/epg-sites.js");
+    const { buildLinks } = await import("../dist/epg-ids.js");
+    const at = Date.parse("2026-10-02T09:30:00Z");
+
+    /* Dish writes India wall-clock with a "Z": 14:31 there is 09:01 UTC. */
+    assert.equal(new Date(dishTime("2026-10-02T14:31:00Z")).toISOString(), "2026-10-02T09:01:00.000Z");
+    assert.ok(Number.isNaN(dishTime("nonsense")));
+    assert.equal(isSiteProvider("airtelxstream.in"), true);
+    assert.equal(isSiteProvider("tataplay.com"), false, "a site that refuses ordinary clients is not here");
+
+    const table = buildLinks([
+        { channel: "Nat.in", site: "airtelxstream.in", site_id: "AIRTEL_NAT" },
+        { channel: "Nat.in", site: "dishtv.in", site_id: "143573" },
+        { channel: "Nat.in", site: "tataplay.com", site_id: "137" },
+        { channel: "Nat.in", site: "airtelxstream.in", site_id: "AIRTEL_NAT" }
+    ]);
+    assert.deepEqual(table.dynamic["Nat.in"], [
+        { site: "airtelxstream.in", siteId: "AIRTEL_NAT" },
+        { site: "dishtv.in", siteId: "143573" }
+    ]);
+
+    const calls = [];
+    const airtelBody = JSON.stringify({
+        programGuide: {
+            AIRTEL_NAT: [
+                { title: "Later", desc: "d", startTime: at + 3_600_000, endTime: at + 7_200_000 },
+                { title: "Now", startTime: at - 1_800_000, endTime: at + 3_600_000 },
+                { title: "", startTime: at, endTime: at + 1 },
+                { title: "Long gone", startTime: at - 40 * 3_600_000, endTime: at - 39 * 3_600_000 }
+            ]
+        }
+    });
+    const dishList = (title, start, stop) => JSON.stringify([{ title, start, stop }]);
+    const get = async (url, _timeout, init) => {
+        calls.push([url, init?.method || "GET"]);
+
+        if (url.includes("epg.airtel.tv")) return { ok: true, status: 200, body: null, text: async () => airtelBody };
+        if (url.includes("/signin")) return { ok: true, status: 200, body: null, text: async () => JSON.stringify({ token: "T" }) };
+
+        const date = JSON.parse(init.body).date;
+
+        assert.equal(init.headers.Authorization, "T");
+
+        return { ok: true, status: 200, body: null, text: async () => (date === "02/10/2026" ? dishList("Dish Now", "2026-10-02T14:31:00Z", "2026-10-02T15:31:00Z") : "[]") };
+    };
+
+    const a = await siteSchedule({ site: "airtelxstream.in", siteId: "AIRTEL_NAT" }, at, get);
+    assert.deepEqual(a.map((p) => p.title), ["Now", "Later"], "ordered; nameless and long-ended dropped");
+    assert.equal(a[0].stop, a[1].start);
+    assert.ok(calls[0][0].includes("channelId=AIRTEL_NAT"));
+
+    const d = await siteSchedule({ site: "dishtv.in", siteId: "143573" }, at, get);
+    assert.deepEqual(d.map((p) => [p.title, new Date(p.start).toISOString()]), [["Dish Now", "2026-10-02T09:01:00.000Z"]]);
+    assert.equal(calls.filter((c) => c[0].includes("/signin")).length, 1);
+
+    /* The store: a site's own API before the name match; an override beats both. */
+    const store = new GuideStore({
+        file: "",
+        now: () => at,
+        overridesFile: (() => {
+            const f = join(mkdtempSync(join(tmpdir(), "epg-site-")), "o.json");
+            writeFileSync(f, JSON.stringify({ "iptv:Blocked.in": null }));
+
+            return f;
+        })(),
+        siteLinks: () => [{ site: "airtelxstream.in", siteId: "AIRTEL_NAT" }],
+        lookup: async () => null,
+        fetcher: get
+    });
+
+    assert.deepEqual((await store.programmesFor("iptv:Nat.in"))?.map((p) => p.title), ["Now", "Later"], "by the site's id: no directory, no name");
+    assert.equal(await store.programmesFor("iptv:Blocked.in"), null, "a hand-made block outranks the site link");
+
+    const failing = new GuideStore({
+        file: "",
+        now: () => at,
+        siteLinks: () => [{ site: "airtelxstream.in", siteId: "X" }],
+        lookup: async () => null,
+        fetcher: async () => ({ ok: false, status: 500, body: null, text: async () => "" })
+    });
+    assert.equal(await failing.programmesFor("iptv:Nat.in"), null, "a site that is down is no guide, not an error");
+}
+
+/* ---- latency: a page never waits longer than its budget ---- */
+
+{
+    const slowDir = mkdtempSync(join(tmpdir(), "epg-slow-"));
+    let t = Date.parse("2026-10-01T12:10:00Z");
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    const list = (title) => JSON.stringify({ epg_list: [{ start_date: "2026-10-01T12:00:00+00:00", title }, { start_date: "2026-10-01T18:00:00+00:00", title: title + " 2" }, { start_date: "2026-10-02T02:00:00+00:00", title: "End" }] });
+    let slow = true;
+    const store = new GuideStore({
+        file: "",
+        now: () => t,
+        lookup: async () => ({ id: "c", name: "Unique Planet", country: "US" }),
+        fetcher: async (url) => {
+            if (url.endsWith(".xml.gz")) {
+                return { ok: true, status: 200, body: Readable.from([gzipSync(Buffer.from(`<tv><channel id="5"><display-name lang="US">Unique Planet</display-name></channel><programme x="1">`))]), text: async () => "" };
+            }
+
+            const title = slow ? "Slow" : "Fresh";
+
+            if (slow) await gate;
+
+            return { ok: true, status: 200, body: null, text: async () => list(title) };
+        }
+    });
+
+    const began = Date.now();
+    const first = await store.programmesWithin("c", 80);
+
+    assert.equal(first, null, "a slow guide: the page gets nothing, rather than waiting");
+    assert.ok(Date.now() - began < 400, `answered within the budget (took ${Date.now() - began} ms)`);
+
+    release();
+    slow = false;
+    assert.ok((await store.programmesFor("c"))?.length, "the lookup carried on and finished in the background");
+    assert.equal((await store.programmesWithin("c", 0))?.[0]?.title, "Slow", "and the next page has it at once");
+
+    /* Stale but with programmes ahead: answered at once, refreshed behind. */
+    t += 13 * HOUR;
+    const stale = await store.programmesWithin("c", 0);
+
+    assert.ok(stale?.length, "a stale schedule with programmes left is still answered");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    assert.equal((await store.programmesWithin("c", 0))?.[0]?.title, "Fresh 2", "the refresh landed");
+    void slowDir;
 }
 
 console.log("epg: ok");

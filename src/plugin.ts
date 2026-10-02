@@ -72,6 +72,7 @@ import { lastTaskRun, runScraperTask } from "./scraper-tasks.js";
 import { scheduleSweep, stopSweep, sweep, sweepState } from "./sweep.js";
 import { liveFetch, registerStream } from "./relay.js";
 import { GuideStore, defaultFetcher, nowLine } from "./epg.js";
+import { warmSites } from "./epg-sites.js";
 import { BulkGuide } from "./epg-bulk.js";
 import { zoneForCountry } from "./timezones.js";
 import { existsSync as fileExists, readFileSync as readFile, writeFileSync as writeFile } from "node:fs";
@@ -82,6 +83,10 @@ import type { PluginFactory, PluginRoute, PluginRouteContext } from "./plugin-ty
 import type { LiveStream, MetaDetail, Sourced, Stream } from "./types.js";
 
 const COUNTRY_PAGE = 60;
+/** How long a page waits for a channel's own guide lookup before it renders
+ *  without (see `scheduleFor`). Core waits 800 ms for the player's extras. */
+const TITLE_PAGE_BUDGET_MS = 400;
+const PLAYER_BUDGET_MS = 600;
 
 function html(body: string, status = 200) {
     return { status, body };
@@ -178,24 +183,25 @@ const createPlugin: PluginFactory = (host, configDir) => {
     const readGuideSettings = (): { dynamic: boolean } => {
         try {
             if (guideSettingsFile && fileExists(guideSettingsFile)) {
-                return { dynamic: (JSON.parse(readFile(guideSettingsFile, "utf8")) as { dynamic?: unknown }).dynamic === true };
+                return { dynamic: (JSON.parse(readFile(guideSettingsFile, "utf8")) as { dynamic?: unknown }).dynamic !== false };
             }
         } catch {
-            /* A broken settings file is the default: off. */
+            /* A broken settings file is the default: on. */
         }
 
-        return { dynamic: false };
+        return { dynamic: true };
     };
     let guideSettings = readGuideSettings();
 
     const bulk = new BulkGuide({
         file: pluginConfig.epgGuide,
         overridesFile: pluginConfig.epgOverrides,
+        linksFile: pluginConfig.epgLinks,
         fetcher: defaultFetcher,
         channels: async () => {
             const built = await channelIndex();
 
-            return built ? [...built.byId.values()].map((channel) => ({ id: channel.id, name: channel.name, country: channel.country })) : [];
+            return built ? [...built.byId.values()].map((channel) => ({ id: channel.id, name: channel.name, country: channel.country, languages: channel.languages })) : [];
         },
         log: (line) => console.log(line)
     });
@@ -205,24 +211,36 @@ const createPlugin: PluginFactory = (host, configDir) => {
     const guide = new GuideStore({
         file: pluginConfig.epgStore,
         overridesFile: pluginConfig.epgOverrides,
+        siteLinks: (id) => bulk.siteLinksFor(id),
         lookup: async (id) => {
             const channel = await findChannel(id);
 
-            return channel ? { id: channel.id, name: channel.name, country: channel.country } : null;
+            return channel ? { id: channel.id, name: channel.name, country: channel.country, languages: channel.languages } : null;
         },
         log: (line) => console.log(line)
     });
 
-    if (guideSettings.dynamic) guide.startWarming();
+    if (guideSettings.dynamic) {
+        guide.startWarming();
+        /* The channel directory is read now, not on the first channel opened. */
+        void guide.ready().catch(() => undefined);
+        void warmSites(defaultFetcher);
+    }
 
-    /** A channel's schedule: the bulk guide first, then -- only when the
-     *  switch is on -- a per-channel fetch. `wait` false never fetches. */
-    async function scheduleFor(channelId: string, wait: boolean): Promise<import("./plugin-types.js").Programme[] | null> {
+    /**
+     * A channel's schedule: the whole-guide data first (in memory, instant),
+     * then -- when per-channel fetching is on -- a lookup of its own, waited
+     * for no longer than `budgetMs`. A lookup still running when the budget
+     * ends carries on in the background and is there next time; 0 never
+     * waits at all. So a page never takes longer than the budget because of
+     * the guide.
+     */
+    async function scheduleFor(channelId: string, budgetMs: number): Promise<import("./plugin-types.js").Programme[] | null> {
         const fromBulk = bulk.programmesFor(channelId);
 
         if (fromBulk || !guideSettings.dynamic) return fromBulk;
 
-        return wait ? guide.programmesFor(channelId).catch(() => null) : guide.peek(channelId);
+        return guide.programmesWithin(channelId, budgetMs);
     }
 
     function setDynamicGuide(on: boolean): void {
@@ -725,7 +743,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.10.0",
+        version: "1.12.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
@@ -748,11 +766,12 @@ const createPlugin: PluginFactory = (host, configDir) => {
             const meta = channelMeta(channel);
             /*
                 WHAT IS ON, in the one line of text every core can show.
-                Never waited for: core asks for this on the press of Play
-                too. A schedule not cached yet is fetched in the
-                background and is on the page the next time it opens.
+                Waited for only briefly (`TITLE_PAGE_BUDGET_MS`): core asks
+                for this on the press of Play too. A schedule that takes
+                longer is fetched in the background and is on the page the
+                next time it opens.
             */
-            const programmes = await scheduleFor(channel.id, false);
+            const programmes = await scheduleFor(channel.id, TITLE_PAGE_BUDGET_MS);
             const line = programmes ? nowLine(programmes) : "";
 
             const zone = zoneForCountry(channel.country);
@@ -795,7 +814,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
 
             if (guideSettings.dynamic) guide.remember(channel.id);
 
-            const programmes = (await scheduleFor(channel.id, true)) || [];
+            const programmes = (await scheduleFor(channel.id, PLAYER_BUDGET_MS)) || [];
             const now = Date.now();
             const ahead = now + 12 * 3_600_000;
             const items = programmes
