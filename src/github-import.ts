@@ -226,7 +226,7 @@ export interface ImportResult {
  * copy is a real update (or the id is new). Never touches a scraper whose
  * id belongs to a built-in.
  */
-export async function importFromGithub(owner: string, repo: string, token: string): Promise<ImportResult> {
+export async function importFromGithub(owner: string, repo: string, token: string, only?: string[]): Promise<ImportResult> {
     const result: ImportResult = { imported: [], updated: [], skipped: [], errors: [] };
 
     const listing = await githubApi<GithubContentEntry[] | GithubContentEntry>(
@@ -235,7 +235,7 @@ export async function importFromGithub(owner: string, repo: string, token: strin
     );
 
     const entries = (Array.isArray(listing) ? listing : [listing]).filter(
-        (entry) => entry.type === "file" && entry.name.endsWith(".mjs")
+        (entry) => entry.type === "file" && entry.name.endsWith(".mjs") && (!only || only.includes(entry.name))
     );
 
     if (!entries.length) {
