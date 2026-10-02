@@ -1834,6 +1834,31 @@ export function codecRank(url: string, cannot: string[]): number {
 }
 
 /**
+ * The full record of every mirror offered lately, by URL. The ranking
+ * probes (`rankReachability`) only get a stream's URL back from core, and a
+ * probe made with the bare URL loses the mirror's decoder and headers: a
+ * DaddyLive mirror was read as a raw PNG and its "resolution" was the
+ * image's. Looking the record up by URL keeps both.
+ */
+const STREAM_META = new Map<string, ChannelStream>();
+const META_CAP = 20_000;
+
+export function streamMeta(url: string): ChannelStream | undefined {
+    return STREAM_META.get(url);
+}
+
+function rememberStreams(streams: ChannelStream[]): void {
+    if (STREAM_META.size > META_CAP) STREAM_META.clear();
+
+    for (const stream of streams) STREAM_META.set(stream.url, stream);
+}
+
+/** The mirror as the index knows it (decoder, headers), or just its URL. */
+function fullStream(url: string): ChannelStream {
+    return STREAM_META.get(url) || { url, quality: "", labels: [], referrer: "", userAgent: "", source: "" };
+}
+
+/**
  * How many lines a mirror's picture has: what was measured when somebody
  * looked (ffprobe's height), else what the list says, else 0 for nothing
  * known -- which sorts last, below every mirror with a number.
@@ -1875,10 +1900,10 @@ export function streamHeading(stream: ChannelStream, cannot: string[]): string {
 /**
  * The row's text. Line one is the heading; the gear line is where core
  * puts a source's origin next to "Live TV" -- here, WHICH scraper or site
- * the mirror came from and which host serves it.
+ * the mirror came from (never the CDN that happens to serve it).
  */
 function streamTitle(stream: ChannelStream, cannot: string[]): string {
-    const origin = [addonFor(stream.source).manifest.name, hostOf(stream.url)].filter(Boolean).join(" \u00b7 ");
+    const origin = addonFor(stream.source).manifest.name;
 
     return [streamHeading(stream, cannot), ...stream.labels, origin ? `\u2699\ufe0f ${origin}` : ""].filter(Boolean).join("\n");
 }
@@ -2091,6 +2116,11 @@ function addonFor(rawSource: string): Addon {
     return addon;
 }
 
+/** The scraper's own name ("DaddyLive", "iptv-org") for a mirror's `source`. */
+export function sourceNameOf(source: string): string {
+    return addonFor(source).manifest.name || source;
+}
+
 export function channelPreview(channel: Channel): MetaPreview {
     return {
         id: channel.id,
@@ -2221,6 +2251,8 @@ export async function channelStreamList(
     cannot: string[] = []
 ): Promise<{ items: Sourced<Stream>[]; failures: AddonFailure[] }> {
     const ranked = rankStreams(channel, cannot);
+
+    rememberStreams(ranked);
 
     if (routedDown) {
         return {
@@ -2775,10 +2807,7 @@ export async function rankReachability(
 
                       if (!stream?.url) return false;
 
-                      return verify(
-                          { url: stream.url, quality: "", labels: [], referrer: "", userAgent: "", source: "" },
-                          liveProxyNow as string
-                      ).catch(() => false);
+                      return verify(fullStream(stream.url), liveProxyNow as string).catch(() => false);
                   })
               );
 
@@ -2793,10 +2822,7 @@ export async function rankReachability(
 
             if (!stream?.url || codecFor(stream.url) || liveProxyNow === null) return;
 
-            await probeCodec(
-                { url: stream.url, quality: "", labels: [], referrer: "", userAgent: "", source: "" },
-                liveProxyNow
-            ).catch(() => null);
+            await probeCodec(fullStream(stream.url), liveProxyNow).catch(() => null);
         })
     );
 

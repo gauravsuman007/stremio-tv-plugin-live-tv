@@ -23,6 +23,7 @@ import {
     allChannelsRanked,
     channelsIn,
     codecFor,
+    sourceNameOf,
     countries,
     countryNamed,
     describeChannel,
@@ -75,6 +76,7 @@ import { GuideStore, defaultFetcher, nowLine } from "./epg.js";
 import { warmSites } from "./epg-sites.js";
 import { BulkGuide } from "./epg-bulk.js";
 import { LogoStore } from "./logos.js";
+import { liveStreamColumn } from "./stream-column.js";
 import { zoneForCountry } from "./timezones.js";
 import { existsSync as fileExists, readFileSync as readFile, writeFileSync as writeFile } from "node:fs";
 import { pluginConfig } from "./plugin-config.js";
@@ -791,7 +793,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.13.1",
+        version: "1.14.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
@@ -804,6 +806,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
             logos.stop();
         },
         routes: () => routes,
+        streamColumn: (input) => liveStreamColumn(input, (url) => codecFor(url), sourceNameOf),
         ownsContentId: (type, id) => type === "tv" && isChannelId(id),
         async metaFor(type, id) {
             if (!(type === "tv" && isChannelId(id))) return null;

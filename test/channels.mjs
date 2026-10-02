@@ -302,4 +302,29 @@ same(
 
 same("one letter is not a search", (await searchChannels("b")).length, 0);
 
+/* ---- the channel's own source column ------------------------------------ */
+
+const { liveStreamColumn } = await import("../dist/stream-column.js");
+const column = channel("Column", {
+    streams: [
+        { url: "https://plain.example.test/a.m3u8", quality: "1080p", labels: [], referrer: "", userAgent: "", source: "iptv-org" },
+        { url: "https://cdn.example.test/b.m3u8", quality: "", labels: [], referrer: "", userAgent: "", source: "iptv-org", decoder: "tiktikpx" }
+    ]
+});
+const offered = (await channelStreamList(column, "", true, [])).items;
+const drawn = liveStreamColumn(
+    { type: "tv", id: column.id, title: "Column", vpn: null, vpnAction: "", back: "", rows: offered.map((entry, at) => ({ href: `/play/${at}`, from: entry.from, stream: entry.value })) },
+    () => null,
+    () => "DaddyLive"
+);
+
+check("a channel gets a column", drawn !== null);
+check("with a row for every mirror", (drawn.html.match(/<a class="row/g) || []).length === 2);
+check("the proxied mirror says PNG proxy, in red", /#d81f2a[^>]*>PNG proxy</.test(drawn.html));
+same("and only it does", (drawn.html.match(/PNG proxy/g) || []).length, 1);
+check("the scraper is named", drawn.html.includes("DaddyLive"));
+check("the CDN is not", !drawn.html.includes("example.test"));
+check("the picture is stated", drawn.html.includes(">1080p<"));
+same("a film has no such column", liveStreamColumn({ type: "movie", id: "x", title: "x", vpn: null, vpnAction: "", back: "", rows: [{ href: "/p", from: offered[0].from, stream: offered[0].value }] }, () => null, () => ""), null);
+
 console.log(`PASSED: ${checks} live-channel checks`);

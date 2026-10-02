@@ -189,7 +189,7 @@ const rows = (await channelStreamList(mixed, "", true, [])).items.map((entry) =>
 same("a stated 4K reads 4K", rows[0][0], "4K");
 same("a stated 1080p reads 1080p", rows[1][0], "1080p");
 same("and nothing known says so, not 'unknown quality'", rows[3][0], "Not checked yet");
-check("the origin is on its own gear line, scraper then host", rows[1].includes("\u2699\ufe0f iptv-org \u00b7 hd.example.test"));
+check("the origin is its own gear line: the scraper, never the CDN host", rows[1].includes("\u2699\ufe0f iptv-org") && !rows[1].join("").includes("example.test"));
 
 /* A still picture is never a codec: a decoder mirror probed raw read "png 1458p". */
 const raw = mirror("disguised", "");
