@@ -135,7 +135,7 @@ const createPlugin = (host, configDir) => {
         fetcher: defaultFetcher,
         channels: async () => {
             const built = await channelIndex();
-            return built ? [...built.byId.values()].map((channel) => ({ id: channel.id, name: channel.name, country: channel.country, languages: channel.languages })) : [];
+            return built ? [...built.byId.values()].map((channel) => ({ id: channel.id, name: channel.name, country: channel.country, languages: channel.languages, mergedIds: channel.mergedIds })) : [];
         },
         log: (line) => console.log(line)
     });
@@ -143,10 +143,13 @@ const createPlugin = (host, configDir) => {
     const guide = new GuideStore({
         file: pluginConfig.epgStore,
         overridesFile: pluginConfig.epgOverrides,
-        siteLinks: (id) => bulk.siteLinksFor(id),
+        siteLinks: async (id) => {
+            const channel = await findChannel(id);
+            return bulk.siteLinksFor(channel || { id });
+        },
         lookup: async (id) => {
             const channel = await findChannel(id);
-            return channel ? { id: channel.id, name: channel.name, country: channel.country, languages: channel.languages } : null;
+            return channel ? { id: channel.id, name: channel.name, country: channel.country, languages: channel.languages, mergedIds: channel.mergedIds } : null;
         },
         log: (line) => console.log(line)
     });
@@ -579,7 +582,7 @@ const createPlugin = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.12.1",
+        version: "1.12.2",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {

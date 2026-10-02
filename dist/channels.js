@@ -321,6 +321,7 @@ async function fromScraper(byId, flagOf, rails) {
                     existing.streams.push(stream);
                 }
                 existing.score = scoreOf(existing.streams, existing.categories, existing.name, existing.logo, existing.website, existing.network);
+                (existing.mergedIds || (existing.mergedIds = [])).push(channel.id);
                 mine.set(channel.id, existing.id);
                 kept += 1;
                 continue;

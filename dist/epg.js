@@ -534,7 +534,7 @@ export class GuideStore {
     async fromSites(channelId, now) {
         if (Object.prototype.hasOwnProperty.call(this.overrides(), channelId))
             return null;
-        for (const link of this.options.siteLinks?.(channelId) || []) {
+        for (const link of (await this.options.siteLinks?.(channelId)) || []) {
             try {
                 const programmes = await siteSchedule(link, now, this.fetcher);
                 if (programmes.length)
