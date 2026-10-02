@@ -80,20 +80,9 @@ remember:
 Nothing enforces any of these three links except a person or an agent
 actually checking, each time.
 
-## The default scraper lives in stremio-tv-scrapers-live-tv
-
-iptv-org is no longer bundled here. On a data folder with no `iptv-org.mjs`
-(and no `iptv-org.deleted`), `default-scraper.ts` imports that one file from
-`gauravsuman007/stremio-tv-scrapers-live-tv` (`dist/iptv-org.mjs`, built by
-that repo's CI) through the ordinary GitHub importer, remembers the repo as a
-source, and retries every five minutes until it lands (the timer is stopped
-by `dispose()`). An existing file is never touched, so installs that already
-have it keep it; updates come through Sources > Check for updates. Its id
-`iptv-org` is never renamed. The same code runs in the standalone live-tv app.
-
 ## Deleting a scraper, and why the default one stays deleted
 
-`deleteScraper` (`scrapers.ts`) removes the file, `<id>.config.json` and the on/off state, then the route forgets the channel index. It also writes `<id>.deleted`: the iptv-org default is fetched again whenever its file is missing, so without the marker a Delete undid itself at the next restart. The marker only stops *seeding*; importing the same id from GitHub still installs it. The old "only source configured" lock is gone -- switching off or deleting the last source is the operator's call, and a page with no channels says why. The settings link on the plugin list points at `/tv/scrapers`, not `/tv` (that is the guide, which is where it used to land).
+`deleteScraper` (`scrapers.ts`) removes the file, `<id>.config.json` and the on/off state, then the route forgets the channel index. It also writes `<id>.deleted`: the bundled iptv-org default is re-seeded whenever its file is missing, so without the marker a Delete undid itself at the next restart. The marker only stops *seeding*; importing the same id from GitHub still installs it. The old "only source configured" lock is gone -- switching off or deleting the last source is the operator's call, and a page with no channels says why. The settings link on the plugin list points at `/tv/scrapers`, not `/tv` (that is the guide, which is where it used to land).
 
 ## The live relay hook, and why a scraper's headers finally reach playback
 

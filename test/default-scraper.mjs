@@ -1,11 +1,11 @@
 /**
- * The default scraper is fetched from the scrapers repository, once, when
- * nothing is on disk and the operator has not deleted it. It is never
- * overwritten by the seeding. The importer is injected: no network here.
+ * The bundled default scraper: seeded once when nothing exists yet, never
+ * clobbered when something customised is already there, and updated only
+ * when the bundled copy's version is a real increase.
  */
 
 import { strict as assert } from "node:assert";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,35 +16,101 @@ function check(what, value) {
     checks += 1;
 }
 
+function same(what, value, expected) {
+    assert.deepEqual(value, expected, what);
+    checks += 1;
+}
+
 const dir = mkdtempSync(join(tmpdir(), "stremio-tv-default-scraper-"));
 
 const { initPluginConfig, pluginConfig } = await import("../dist/plugin-config.js");
 initPluginConfig(dir);
-mkdirSync(pluginConfig.scrapersDir, { recursive: true });
 
-const { seedDefaultScraper, DEFAULT_SCRAPER_ID, DEFAULT_SOURCE } = await import("../dist/default-scraper.js");
-const calls = [];
-const ok = async (...args) => {
-    calls.push(args);
-    writeFileSync(join(pluginConfig.scrapersDir, `${DEFAULT_SCRAPER_ID}.mjs`), "// fetched");
-    return { imported: [DEFAULT_SCRAPER_ID], updated: [], skipped: [], errors: [] };
-};
+const dropDir = pluginConfig.scrapersDir;
+mkdirSync(dropDir, { recursive: true });
 
-check("the default comes from the scrapers repository", DEFAULT_SOURCE.repo === "stremio-tv-scrapers-live-tv");
+const { seedOrUpdateDefaultScraper, DEFAULT_SCRAPER_ID } = await import("../dist/default-scraper.js");
+const targetPath = join(dropDir, `${DEFAULT_SCRAPER_ID}.mjs`);
 
-const failed = await seedDefaultScraper(async () => { throw new Error("offline"); });
-check("an unreachable repository is a failure to retry, not a crash", failed === "failed");
+/* ---- nothing on disk yet: seeded from the bundled dist/scrapers/ copy -- */
 
-check("an empty import counts as a failure", (await seedDefaultScraper(async () => ({ imported: [], updated: [], skipped: [], errors: [{ file: "x", error: "boom" }] }))) === "failed");
+check("nothing seeded yet", !existsSync(targetPath));
 
-check("a fresh volume fetches it", (await seedDefaultScraper(ok)) === "seeded");
-check("and asks for that one file only, with no token", calls[0][3][0] === "iptv-org.mjs" && calls[0][2] === "");
-check("a second start leaves the file alone", (await seedDefaultScraper(ok)) === "present" && calls.length === 1);
+await seedOrUpdateDefaultScraper();
 
-const dir2 = mkdtempSync(join(tmpdir(), "stremio-tv-default-scraper-"));
-initPluginConfig(dir2);
-mkdirSync(pluginConfig.scrapersDir, { recursive: true });
-writeFileSync(join(pluginConfig.scrapersDir, `${DEFAULT_SCRAPER_ID}.deleted`), "");
-check("a deliberate delete stays deleted", (await seedDefaultScraper(ok)) === "deleted" && calls.length === 1);
+check("the bundled default scraper is copied in on first load", existsSync(targetPath));
+
+const seeded = readFileSync(targetPath, "utf8");
+
+check("the seeded file looks like the real iptv-org scraper", seeded.includes('id: "iptv-org"'));
+
+/* ---- already present, no version at all: versioned beats unversioned --- *
+ * same convention as github-import.ts's versionSupersedes -- an
+ * unversioned file on disk can never be known to be newer than a versioned
+ * bundled copy, so it is treated as an update, not left alone. */
+
+writeFileSync(targetPath, `export const scraper = {
+    id: "iptv-org",
+    name: "customised by an operator, no version",
+    async build() { return { channels: [] }; }
+};`);
+
+await seedOrUpdateDefaultScraper();
+
+same(
+    "an unversioned existing file is superseded by the versioned bundled copy",
+    readFileSync(targetPath, "utf8").includes("customised by an operator"),
+    false
+);
+
+/* ---- already present, SAME version as the bundled copy: never clobbered */
+
+writeFileSync(targetPath, `export const scraper = {
+    id: "iptv-org",
+    name: "customised by an operator, same version",
+    version: "1.0.0",
+    async build() { return { channels: [] }; }
+};`);
+
+await seedOrUpdateDefaultScraper();
+
+same(
+    "an existing file at the same version as the bundled copy is left alone, not overwritten every boot",
+    readFileSync(targetPath, "utf8").includes("customised by an operator, same version"),
+    true
+);
+
+/* ---- an existing file with a version the bundled copy does not beat ---- */
+
+writeFileSync(targetPath, `export const scraper = {
+    id: "iptv-org",
+    name: "still customised",
+    version: "999.0.0",
+    async build() { return { channels: [] }; }
+};`);
+
+await seedOrUpdateDefaultScraper();
+
+check(
+    "a version the bundled copy cannot beat is kept as-is",
+    readFileSync(targetPath, "utf8").includes("still customised")
+);
+
+/* ---- an existing file with an older version is updated to the bundled -- */
+
+writeFileSync(targetPath, `export const scraper = {
+    id: "iptv-org",
+    name: "old copy",
+    version: "0.0.1",
+    async build() { return { channels: [] }; }
+};`);
+
+await seedOrUpdateDefaultScraper();
+
+check(
+    "an existing file with an older version is replaced by the bundled copy",
+    readFileSync(targetPath, "utf8").includes('id: "iptv-org"') &&
+        !readFileSync(targetPath, "utf8").includes("old copy")
+);
 
 console.log(`PASSED: ${checks} default-scraper checks`);

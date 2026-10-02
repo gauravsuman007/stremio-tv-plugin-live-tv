@@ -66,7 +66,7 @@ import {
     scraperRunning,
     setScraperEnabled
 } from "./scrapers.js";
-import { seedDefaultScraper } from "./default-scraper.js";
+import { seedOrUpdateDefaultScraper } from "./default-scraper.js";
 import { getScraperConfig, setScraperConfig } from "./scraper-config.js";
 import { startScraperScheduler, stopScraperScheduler } from "./scraper-scheduler.js";
 import { lastTaskRun, runScraperTask } from "./scraper-tasks.js";
@@ -145,30 +145,16 @@ const createPlugin: PluginFactory = (host, configDir) => {
     initPluginConfig(configDir);
 
     /*
-        The default scraper is fetched from the scrapers repository the
-        first time (see default-scraper.ts), which needs the network, so a
-        failure is retried every five minutes until it lands. The timer is
-        stopped by `dispose()`. `loadDynamicScrapers()` follows every
-        attempt so a freshly fetched file is picked up at once.
+        Kicked off here, not awaited -- seeding/updating the bundled
+        default scraper is a plain file copy (see default-scraper.ts), but
+        still must never delay stremio-tv's boot. `configDir` (and so
+        `pluginConfig.scrapersDir`) is set above, before this runs.
+        `loadDynamicScrapers()` is chained after it so a freshly seeded or
+        updated file is picked up on this same boot rather than the next.
     */
-    let seedTimer: NodeJS.Timeout | null = null;
-    let disposed = false;
-    const seed = (): void => {
-        seedTimer = null;
-        void seedDefaultScraper()
-            .then(async (outcome) => {
-                if (disposed) return;
-                if (outcome === "seeded") await loadDynamicScrapers();
-                if (outcome === "failed") {
-                    seedTimer = setTimeout(seed, 5 * 60_000);
-                    seedTimer.unref?.();
-                }
-            })
-            .catch((cause) => console.error("live-tv: seeding the default scraper failed", cause));
-    };
-
-    seed();
-    void loadDynamicScrapers();
+    void seedOrUpdateDefaultScraper()
+        .catch((cause) => console.error("live-tv: seeding/updating the default scraper failed", cause))
+        .then(() => loadDynamicScrapers());
 
     /*
         Ported from stremio-tv's own boot sequence (`index.ts`'s
@@ -807,12 +793,10 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.15.0",
+        version: "1.15.1",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
-            disposed = true;
-            if (seedTimer) clearTimeout(seedTimer);
             stopScraperScheduler();
             stopChannelRefresh();
             stopSweep();
