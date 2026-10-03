@@ -44,6 +44,7 @@ import { host } from "./host.js";
 import { channelIndex } from "./channels.js";
 import { allScrapers } from "./scrapers.js";
 import { aimOf } from "./resolve.js";
+import { clearKeyPlaylist, clearKeySegment } from "./clearkey.js";
 /** The same default core sends, so a stream that only needed a Referer
  *  is not also handed a different User-Agent than everything else. */
 const DEFAULT_UA = "VLC/3.0.20 LibVLC/3.0.20";
@@ -63,7 +64,7 @@ const PEEK = 8 * 1024;
 const rules = new Map();
 /** Whether this mirror needs the relay at all. Most do not. */
 export function needsRelay(stream) {
-    return Boolean(stream.referrer || stream.userAgent || stream.decoder || stream.resolver);
+    return Boolean(stream.referrer || stream.userAgent || stream.decoder || stream.resolver || stream.clearKey);
 }
 function ruleOf(stream) {
     return {
@@ -71,6 +72,7 @@ function ruleOf(stream) {
         userAgent: stream.userAgent,
         decoder: stream.decoder ? { scraper: stream.source, name: stream.decoder } : undefined,
         resolve: stream.resolver ? { handle: stream.url, resolver: stream.resolver, source: stream.source } : undefined,
+        clearKey: stream.clearKey,
         at: Date.now()
     };
 }
@@ -193,6 +195,10 @@ function answer(status, url, type, body) {
  * for -- which is nearly all of them.
  */
 export async function liveFetch(url, options) {
+    /* A segment of a ClearKey session names itself; no rule is needed (`clearkey.ts`). */
+    const segment = clearKeySegment(url);
+    if (segment)
+        return segment;
     const found = await ruleFor(url);
     if (!found)
         return null;
@@ -215,7 +221,21 @@ export async function liveFetch(url, options) {
         if (!aim)
             return answer(502, url, "text/plain", Buffer.from("This source could not be resolved right now."));
         target = aim.url;
-        rule = { ...found, referrer: aim.referrer, userAgent: aim.userAgent, resolve: undefined };
+        rule = { ...found, referrer: aim.referrer, userAgent: aim.userAgent, resolve: undefined, clearKey: aim.clearKey ?? found.clearKey };
+    }
+    /*
+        ENCRYPTED DASH: not fetched at all. An ffmpeg session decrypts it to
+        HLS and the answer is that session's playlist; its segments come
+        back as `clearkey.invalid` URLs handled at the top of this function.
+    */
+    if (rule.clearKey) {
+        return clearKeyPlaylist({
+            manifest: target,
+            key: rule.clearKey.key,
+            referrer: rule.referrer,
+            userAgent: rule.userAgent,
+            proxy: options.proxy
+        });
     }
     const upstream = await host.fetchVia(target, {
         proxy: options.proxy,

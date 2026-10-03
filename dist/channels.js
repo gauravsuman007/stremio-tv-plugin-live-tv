@@ -50,7 +50,8 @@ import { dirname } from "node:path";
 import { spawn } from "node:child_process";
 import { pluginConfig as config } from "./plugin-config.js";
 import { host } from "./host.js";
-import { relayAvailable, resolverAvailable } from "./relay-support.js";
+import { clearKeyApiAvailable, relayAvailable, resolverAvailable } from "./relay-support.js";
+import { ffmpegAvailable, validKey } from "./clearkey.js";
 import { aimOf } from "./resolve.js";
 import { genreLabel, genreOf, languageLabel, languagesOf } from "./taxonomy.js";
 import { allScrapers, beginScraperRun, endScraperRun, lastRun, recordRun, scraperEnabled, scraperStopRequested } from "./scrapers.js";
@@ -70,6 +71,10 @@ export const PREFIX = "iptv:";
  *  plugin system and already sit in favourites and watch-progress on a
  *  running deployment -- see `src/scrapers/iptv-org.ts`. */
 export const LIVE_PREFIX = "live:";
+/** Whether this host can play a ClearKey mirror right now. */
+function clearKeyUsable(stream) {
+    return Boolean(stream.clearKey && !stream.decoder && relayAvailable() && clearKeyApiAvailable() && validKey(stream.clearKey.key) && ffmpegAvailable());
+}
 /*
     HOW MUCH A CATEGORY IS WORTH.
 
@@ -297,6 +302,13 @@ async function fromScraper(byId, flagOf, rails) {
                 picture instead of video.
             */
             /*
+                A CLEARKEY MIRROR is encrypted DASH that only this plugin's
+                relay can turn into HLS (an ffmpeg decrypting it), so it
+                needs the relay, a core that never hands it to the
+                television directly (API 1.6.0), an ffmpeg that can do it,
+                and a well-formed key. See `clearkey.ts`.
+            */
+            /*
                 The same goes for a mirror that names a RESOLVER: its `url`
                 is a handle that goes nowhere on its own, and it needs the
                 relay as much as a decoder does (it is the relay that
@@ -304,7 +316,8 @@ async function fromScraper(byId, flagOf, rails) {
                 hand it to the television directly (API 1.5.0).
             */
             const playable = channel.streams.filter((stream) => (!stream.decoder || (relayAvailable() && typeof scraper.decoders?.[stream.decoder] === "function")) &&
-                (!stream.resolver || (resolverAvailable() && typeof scraper.resolvers?.[stream.resolver] === "function")));
+                (!stream.resolver || (resolverAvailable() && typeof scraper.resolvers?.[stream.resolver] === "function")) &&
+                (!stream.clearKey || clearKeyUsable(stream)));
             if (!playable.length)
                 continue;
             const taggedStreams = playable.map((stream) => ({
@@ -329,6 +342,17 @@ async function fromScraper(byId, flagOf, rails) {
                     seen.add(stream.url);
                     existing.streams.push(stream);
                 }
+                /*
+                    THE PICTURE COMES FROM WHICHEVER SOURCE HAS ONE. The
+                    existing card keeps its own id and place, but a card
+                    whose first source had no logo must not stay without one
+                    because a later source did -- and a pair of flags beats a
+                    single picture (`ScrapedChannel.logos`).
+                */
+                if (!existing.logo && channel.logo)
+                    existing.logo = channel.logo;
+                if (!existing.logos?.length && channel.logos && channel.logos.length > 1)
+                    existing.logos = channel.logos.slice(0, 2);
                 existing.score = scoreOf(existing.streams, existing.categories, existing.name, existing.logo, existing.website, existing.network);
                 (existing.mergedIds || (existing.mergedIds = [])).push(channel.id);
                 mine.set(channel.id, existing.id);
@@ -343,6 +367,7 @@ async function fromScraper(byId, flagOf, rails) {
                 categories: channel.categories,
                 languages: channel.languages,
                 logo: channel.logo,
+                ...(channel.logos && channel.logos.length > 1 ? { logos: channel.logos.slice(0, 2) } : {}),
                 website: channel.website,
                 network: channel.network,
                 streams: taggedStreams,
@@ -972,6 +997,17 @@ export async function verify(stream, proxy = "") {
         const aim = await aimOf(stream);
         if (!aim)
             throw new Error("unresolvable");
+        /*
+            ENCRYPTED DASH IS CHECKED AS FAR AS ITS MANIFEST: reachable and
+            really an MPD. Whether the key is right is found out by playing.
+        */
+        if (aim.clearKey) {
+            const got = await taste(aim.url, { ...stream, referrer: aim.referrer, userAgent: aim.userAgent }, proxy, 64 * 1024);
+            ok = got.status < 400 && /<MPD[\s>]/.test(got.text);
+            remember(stream.url, ok);
+            scheduleSave();
+            return ok;
+        }
         const upstream = await fetchVia(aim.url, {
             proxy,
             headers: {
@@ -1241,6 +1277,9 @@ export async function probeCodec(stream, proxy = "") {
         const aim = await aimOf(stream);
         if (!aim)
             return null;
+        /* Encrypted DASH is not probed: its copy into HLS is ours, and the codec is whatever it carried. */
+        if (aim.clearKey)
+            return null;
         const live = { ...stream, url: aim.url, referrer: aim.referrer, userAgent: aim.userAgent };
         const top = await taste(live.url, live, proxy, 64 * 1024);
         if (top.status >= 400 || !top.text.trimStart().startsWith("#EXTM3U"))
@@ -1314,7 +1353,11 @@ export async function deepVerify(stream, proxy = "") {
             throw new Error("unresolvable");
         const live = { ...stream, url: aim.url, referrer: aim.referrer, userAgent: aim.userAgent };
         const top = await taste(live.url, live, proxy, 64 * 1024);
-        if (top.status < 400 && top.text.trimStart().startsWith("#EXTM3U")) {
+        if (aim.clearKey) {
+            /* The manifest is as deep as this goes without spending an ffmpeg per source per night. */
+            ok = top.status < 400 && /<MPD[\s>]/.test(top.text);
+        }
+        else if (top.status < 400 && top.text.trimStart().startsWith("#EXTM3U")) {
             const first = urisIn(top.text, live.url);
             const lists = [];
             if (first.variants.length === 0) {

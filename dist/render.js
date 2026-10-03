@@ -29,9 +29,10 @@ export const chanCard = (client, channel, direct, lazy) => {
         older core ignores the field). A favourite or a recently watched
         entry is only an id, name and logo, so it is looked up.
     */
-    const known = channel.chips ? null : peekChannel(channel.id);
+    const known = peekChannel(channel.id);
     const chips = channel.chips || (known ? regionChips(known, 1) : undefined);
-    const swapped = swapLogo ? swapLogo(channel) : null;
+    /* A favourite or a recently watched entry is only an id, name and logo; the pair of flags is the index's to say. */
+    const swapped = swapLogo ? swapLogo(known?.logos ? { ...channel, logos: known.logos } : channel) : null;
     const given = swapped && !channel.logo ? { ...channel, logo: NO_LOGO } : channel;
     const card = host.render.chanCard(client, chips && chips.length ? { ...given, chips } : given, direct, lazy);
     if (!swapped)

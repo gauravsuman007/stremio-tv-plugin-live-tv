@@ -393,6 +393,30 @@ export function tileSvg(png) {
 <image x="24" y="18" width="${TILE_W - 48}" height="${TILE_H - 36}" preserveAspectRatio="xMidYMid meet" xlink:href="data:image/png;base64,${data}"/>
 </svg>`;
 }
+/**
+ * A fixture's two flags (or crests) side by side on the same near-black tile
+ * the single logos get. Each picture is whatever the store settled for it --
+ * a readable PNG as it is, a remade tile PNG, or an SVG original -- so there
+ * is no recolouring here: a flag is not a wordmark, and the stripe that would
+ * be lifted is the point of it. A small "vs" sits between them.
+ */
+export function pairSvg(images) {
+    const two = images.slice(0, 2);
+    const box = 124;
+    const gap = 40;
+    const left = (TILE_W - (box * 2 + gap)) / 2;
+    const top = (TILE_H - box) / 2;
+    const place = (index) => {
+        const image = two[index];
+        return `<image x="${left + index * (box + gap)}" y="${top}" width="${box}" height="${box}" preserveAspectRatio="xMidYMid meet" xlink:href="data:${image.mime};base64,${Buffer.from(image.data).toString("base64")}"/>`;
+    };
+    return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 ${TILE_W} ${TILE_H}" width="${TILE_W}" height="${TILE_H}">
+<rect x="1" y="1" width="${TILE_W - 2}" height="${TILE_H - 2}" rx="14" fill="${TILE_BG}" stroke="${TILE_BORDER}" stroke-width="2"/>
+${place(0)}
+<text x="${TILE_W / 2}" y="${TILE_H / 2 + 5}" text-anchor="middle" font-family="Roboto, 'Helvetica Neue', Arial, sans-serif" font-weight="700" font-size="15" fill="#8a8a8a">vs</text>
+${place(1)}
+</svg>`;
+}
 function hashOf(text) {
     let h = 2166136261;
     for (const ch of text)

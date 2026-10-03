@@ -44,8 +44,9 @@ export function resolverOf(stream) {
  * A stream with no resolver is its own answer, synchronously cheap.
  */
 export async function aimOf(stream) {
-    if (!stream.resolver)
-        return { url: stream.url, referrer: stream.referrer, userAgent: stream.userAgent };
+    if (!stream.resolver) {
+        return { url: stream.url, referrer: stream.referrer, userAgent: stream.userAgent, ...(stream.clearKey ? { clearKey: stream.clearKey } : {}) };
+    }
     const kept = answers.get(stream.url);
     if (kept && Date.now() - kept.at < (kept.aim ? FRESH_MS : FAILED_MS))
         return kept.aim;
@@ -70,7 +71,8 @@ export async function aimOf(stream) {
             return {
                 url: got.url,
                 referrer: got.referrer ?? stream.referrer,
-                userAgent: got.userAgent ?? stream.userAgent
+                userAgent: got.userAgent ?? stream.userAgent,
+                ...((got.clearKey ?? stream.clearKey) ? { clearKey: (got.clearKey ?? stream.clearKey) } : {})
             };
         }
         catch (cause) {

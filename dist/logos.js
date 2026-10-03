@@ -40,7 +40,7 @@
  */
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { assess, decodePng, encodePng, fitToPng, LOGO_DESIGN, pillSvg, readable, recolor, tileSvg } from "./logo-image.js";
+import { assess, decodePng, encodePng, fitToPng, LOGO_DESIGN, pairSvg, pillSvg, readable, recolor, tileSvg } from "./logo-image.js";
 const DAY = 86_400_000;
 const REVALIDATE = 30 * DAY;
 const RETRY_FAILED = 14 * DAY;
@@ -161,6 +161,16 @@ export class LogoStore {
      * app-relative path (`/tv/logo/...`), or null to leave the logo alone.
      */
     swap(channel) {
+        /*
+            A PAIR is drawn only when both pictures are settled and usable;
+            until then (or if either is gone) the card shows what it always
+            did, its one logo.
+        */
+        const pair = channel.logos && channel.logos.length > 1 ? channel.logos.slice(0, 2).map((url) => ({ key: keyOf(url), entry: this.entries.get(keyOf(url)) })) : null;
+        if (pair && pair.every(({ entry }) => entry && (entry.status === "ok" || entry.status === "processed" || entry.status === "svg"))) {
+            const v = pair.map(({ entry }) => `${entry.at}.${entry.v}`).join("-");
+            return `/tv/logo/p${pair[0]?.key}${pair[1]?.key}.svg?v=${v}`;
+        }
         if (!channel.logo)
             return `/tv/logo/g${pillKey(channel.id)}.svg?n=${encodeURIComponent(channel.name)}&d=${LOGO_DESIGN}`;
         const key = keyOf(channel.logo);
@@ -183,6 +193,13 @@ export class LogoStore {
         const pill = /^g[0-9a-f]{12}\.svg$/.exec(file);
         if (pill)
             return { status: 200, headers: { ...cache, "content-type": "image/svg+xml" }, body: pillSvg(String(query.get("n") || "")) };
+        const joined = /^p([0-9a-f]{20})([0-9a-f]{20})\.svg$/.exec(file);
+        if (joined) {
+            const parts = [joined[1], joined[2]].map((key) => this.imageOf(key));
+            if (parts.some((part) => !part))
+                return gone;
+            return { status: 200, headers: { ...cache, "content-type": "image/svg+xml" }, body: pairSvg(parts) };
+        }
         const named = /^u([0-9a-f]{20})\.(png|svg)$/.exec(file);
         const entry = named ? this.entries.get(named[1]) : undefined;
         if (!named || !entry)
@@ -200,6 +217,22 @@ export class LogoStore {
             return gone;
         }
         return gone;
+    }
+    /** The picture the store holds for one logo, as an image a tile can embed, or null. */
+    imageOf(key) {
+        const entry = this.entries.get(key);
+        try {
+            if (entry?.status === "ok")
+                return { mime: "image/png", data: readFileSync(`${this.options.dir}/${key}.png`) };
+            if (entry?.status === "processed")
+                return { mime: "image/png", data: readFileSync(`${this.options.dir}/${key}.tile.png`) };
+            if (entry?.status === "svg")
+                return { mime: "image/svg+xml", data: readFileSync(`${this.options.dir}/${key}.orig`) };
+        }
+        catch {
+            return null;
+        }
+        return null;
     }
     /* ---- one pass ---- */
     needs(entry, now) {
@@ -225,6 +258,9 @@ export class LogoStore {
                     urls.add(channel.logo);
                 else
                     summary.noLogo += 1;
+                for (const extra of channel.logos?.slice(0, 2) || [])
+                    if (extra)
+                        urls.add(extra);
             }
             summary.channels = channels.length;
             this.noLogo = summary.noLogo;
