@@ -14,19 +14,22 @@
 
 import { allScrapers } from "./scrapers.js";
 
-import type { StreamResolver } from "./scraper-types.js";
+import type { ClearKey, StreamResolver } from "./scraper-types.js";
 
 /** What a stream is fetched as, this time. */
 export interface Aim {
     url: string;
     referrer: string;
     userAgent: string;
+    /** Set when what is at `url` is ClearKey-encrypted DASH (`ScrapedStream.clearKey`). */
+    clearKey?: ClearKey;
 }
 
 interface Streamish {
     url: string;
     referrer: string;
     userAgent: string;
+    clearKey?: ClearKey;
     resolver?: string;
     source: string;
 }
@@ -70,7 +73,9 @@ export function resolverOf(stream: Pick<Streamish, "resolver" | "source">): Stre
  * A stream with no resolver is its own answer, synchronously cheap.
  */
 export async function aimOf(stream: Streamish): Promise<Aim | null> {
-    if (!stream.resolver) return { url: stream.url, referrer: stream.referrer, userAgent: stream.userAgent };
+    if (!stream.resolver) {
+        return { url: stream.url, referrer: stream.referrer, userAgent: stream.userAgent, ...(stream.clearKey ? { clearKey: stream.clearKey } : {}) };
+    }
 
     const kept = answers.get(stream.url);
 
@@ -101,7 +106,8 @@ export async function aimOf(stream: Streamish): Promise<Aim | null> {
             return {
                 url: got.url,
                 referrer: got.referrer ?? stream.referrer,
-                userAgent: got.userAgent ?? stream.userAgent
+                userAgent: got.userAgent ?? stream.userAgent,
+                ...((got.clearKey ?? stream.clearKey) ? { clearKey: (got.clearKey ?? stream.clearKey) as ClearKey } : {})
             };
         } catch (cause) {
             console.error(`live-tv: resolver "${stream.resolver}" of "${stream.source}" threw for ${stream.url}`, cause);

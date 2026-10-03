@@ -14,6 +14,11 @@ const RELAY_API = [1, 2, 0];
  *  device fetching it directly would find nothing. */
 const RESOLVER_API = [1, 5, 0];
 
+/** The first core plugin API that never hands a CLEARKEY mirror straight to
+ *  the television (`ScrapedStream.clearKey`): its `url` is an encrypted DASH
+ *  manifest, which only this plugin's relay can turn into playable HLS. */
+const CLEARKEY_API = [1, 6, 0];
+
 function atLeast(need: number[]): boolean {
     const said = (host.pluginApiVersion || "1.0.0").split(".").map((part) => Number(part) || 0);
 
@@ -34,4 +39,9 @@ export function relayAvailable(): boolean {
 /** Whether the running core knows what to do with a resolver mirror. */
 export function resolverAvailable(): boolean {
     return atLeast(RESOLVER_API);
+}
+
+/** Whether the running core knows what to do with a ClearKey mirror. */
+export function clearKeyApiAvailable(): boolean {
+    return atLeast(CLEARKEY_API);
 }

@@ -72,6 +72,7 @@ import { startScraperScheduler, stopScraperScheduler } from "./scraper-scheduler
 import { lastTaskRun, runScraperTask } from "./scraper-tasks.js";
 import { scheduleSweep, stopSweep, sweep, sweepState } from "./sweep.js";
 import { liveFetch, registerStream } from "./relay.js";
+import { stopClearKey } from "./clearkey.js";
 import { GuideStore, defaultFetcher, nowLine } from "./epg.js";
 import { warmSites } from "./epg-sites.js";
 import { BulkGuide } from "./epg-bulk.js";
@@ -247,7 +248,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
         channels: async () => {
             const built = await channelIndex();
 
-            return built ? [...built.byId.values()].map((channel) => ({ id: channel.id, name: channel.name, logo: channel.logo })) : [];
+            return built ? [...built.byId.values()].map((channel) => ({ id: channel.id, name: channel.name, logo: channel.logo, logos: channel.logos })) : [];
         },
         log: (line) => console.log(line)
     });
@@ -793,7 +794,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
     return {
         id: "live-tv",
         name: "Live TV",
-        version: "1.16.0",
+        version: "1.17.0",
         apiVersion: PLUGIN_API_VERSION,
         configDir: "",
         dispose() {
@@ -804,6 +805,7 @@ const createPlugin: PluginFactory = (host, configDir) => {
             guide.stop();
             bulk.stop();
             logos.stop();
+            stopClearKey();
         },
         routes: () => routes,
         streamColumn: (input) => liveStreamColumn(input, (url) => codecFor(url), sourceNameOf),

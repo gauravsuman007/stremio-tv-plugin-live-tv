@@ -169,3 +169,51 @@ directly (`direct:` in its `index.ts`). On an older core resolver mirrors are
 dropped, not offered. This mirrors the standalone live-tv app's
 `src/livetv/resolve.ts`; keep the two in step, and `docs/scraper-template.ts`
 with `src/scraper-types.ts`.
+
+
+## A stream can be encrypted: ClearKey DASH served as HLS
+
+`ScrapedStream.clearKey` (plugin 1.17.0) marks a mirror whose `url` is a DASH
+manifest encrypted with Common Encryption and carries the ClearKey that opens
+it. A television cannot be handed a key through a URL, so the plugin's relay
+does the decryption: `src/clearkey.ts` runs ONE ffmpeg per distinct stream
+(`-cenc_decryption_key KEY -i MANIFEST -c copy -f hls`, never a re-encode),
+shared by every viewer, and `liveFetch` answers the manifest URL with its
+playlist and its segments (`https://clearkey.invalid/<session>/s<N>.ts`,
+recognised by shape) from the session's directory. To core and the television
+it is an ordinary HLS channel.
+
+Offered only when it can play (`clearKeyUsable` in `channels.ts`): the relay
+exists, **core is at plugin API 1.6.0** (it must never hand the MPD to a
+device directly -- `direct:` in its `index.ts`, the same rule as a resolver
+mirror), `ffmpeg` can read DASH and decrypt CENC (`FFMPEG_PATH` overrides),
+the key is exactly 32 hex characters, and the stream names no `decoder`.
+Otherwise it is dropped, not shown broken. `verify`/`deepVerify` check the
+manifest only (`<MPD`); `probeCodec` skips it. Sessions die after 45 s idle,
+at most 6 run at once, a source that will not start is a 502 and is not
+relaunched for 30 s, and `dispose()` calls `stopClearKey()`.
+
+This is a copy of the standalone live-tv app's `src/livetv/clearkey.ts` (and
+`relay.ts`, `relay-support.ts`, `resolve.ts`, which are byte-identical to
+theirs). `test/clearkey.mjs` runs against a stub ffmpeg; the real thing was
+checked by hand against a live encrypted stream. See that repo's AGENTS.md,
+"A stream can be encrypted", for the reasoning and the limits (one key pair
+only; no Widevine/PlayReady/FairPlay).
+
+**A contract change like this one is three repos, not one**: this repo's
+`src/scraper-types.ts` (+ `docs/scraper-template.ts`), the live-tv app's
+`src/livetv/scraper-types.ts` (+ `docs/scraper-template.ts`), and
+stremio-tv-scrapers-live-tv's `template/scraper-template.mts` -- plus core's
+`PLUGIN_API_VERSION` when the host side needs core to cooperate.
+
+
+## A card can have two pictures (`ScrapedChannel.logos`), and merged events keep any picture
+
+`logos` is an optional pair of image URLs for one card -- a fixture's two
+flags -- drawn side by side by `logos.ts`/`logo-image.ts#pairSvg` when BOTH are
+settled (route `/tv/logo/p<keyA><keyB>.svg`), else the card keeps its one
+`logo`. When two sources' events merge, `channels.ts` now adopts the incoming
+`logo` (and a pair) if the existing card has none. Byte-for-byte the same as the
+standalone app's `src/livetv/` (`logo-image.ts`, `render.ts`; `logos.ts` differs
+by its User-Agent line only); see that repo's AGENTS.md for the reasoning.
+Tests: `test/logos.mjs`, `test/event-logos.mjs`.

@@ -13,7 +13,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const { assess, decodePng, encodePng, pillSvg, readable, recolor, tileSvg } = await import("../dist/logo-image.js");
+const { assess, decodePng, encodePng, pairSvg, pillSvg, readable, recolor, tileSvg } = await import("../dist/logo-image.js");
 const { LogoStore } = await import("../dist/logos.js");
 
 /** A 160x90 picture: `paint(x, y)` returns [r, g, b, a]. */
@@ -101,6 +101,18 @@ assert.match(tile, /^<svg /);
 assert.match(tile, /data:image\/png;base64,/);
 assert.match(tile, /#121212/);
 assert.doesNotMatch(tile, /#fff/i, "no white on the tile");
+
+const pairTile = pairSvg([
+    { mime: "image/png", data: encodePng(redOnClear) },
+    { mime: "image/svg+xml", data: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="4"/></svg>') }
+]);
+
+assert.match(pairTile, /^<svg /);
+assert.equal((pairTile.match(/<image /g) || []).length, 2, "two pictures on one tile");
+assert.match(pairTile, /data:image\/png;base64,/);
+assert.match(pairTile, /data:image\/svg\+xml;base64,/);
+assert.match(pairTile, />vs</, "with a vs between them");
+assert.equal((pairSvg([{ mime: "image/png", data: encodePng(redOnClear) }, { mime: "image/png", data: encodePng(redOnClear) }, { mime: "image/png", data: encodePng(redOnClear) }]).match(/<image /g) || []).length, 2, "never more than two");
 
 assert.equal(pillSvg("Kids Box"), pillSvg("Kids Box"), "the same name is the same pill every night");
 assert.notEqual(pillSvg("Kids Box"), pillSvg("Tele Vision"));
@@ -230,6 +242,47 @@ assert.equal(redesigned.lastPass().reprocessed, 4);
 channels[1] = { ...channels[1], logo: "https://a.test/black.png" };
 await redesigned.refresh("moved");
 assert.match(redesigned.swap(channels[1]), /\.svg\?v=/, "black.png is processed, shared with the first channel");
+
+
+/* ---- a fixture's two flags on one tile ---- */
+
+served.set("https://flags.test/india.png", { status: 200, type: "image/png", body: png(redOnClear) });
+served.set("https://flags.test/windies.png", { status: 200, type: "image/png", body: png(whiteOnClear) });
+served.set("https://flags.test/dark.png", { status: 200, type: "image/png", body: png(blackOnClear) });
+
+const fixture = { id: "live:t:fixture", name: "India vs West Indies", logo: "https://flags.test/india.png", logos: ["https://flags.test/india.png", "https://flags.test/windies.png"] };
+const darkFixture = { id: "live:t:dark", name: "Dark vs Red", logo: "https://flags.test/dark.png", logos: ["https://flags.test/dark.png", "https://flags.test/india.png"] };
+const brokenFixture = { id: "live:t:broken", name: "Broken Pair", logo: "https://flags.test/india.png", logos: ["https://flags.test/india.png", "https://b.test/gone.png"] };
+const pairStore = new LogoStore({ ...options, dir: join(root, "pair-logos"), stateFile: join(root, "pair.json"), channels: async () => [fixture, darkFixture, brokenFixture] });
+
+assert.equal(pairStore.swap(fixture), null, "before a pass the card is what core draws");
+
+await pairStore.refresh("pair");
+
+const pairUrl = pairStore.swap(fixture);
+
+assert.match(pairUrl, /^\/tv\/logo\/p[0-9a-f]{40}\.svg\?v=/, "both flags settled: one pair tile");
+
+const pairServed = pairStore.serve(pairUrl.replace("/tv/logo/", "").split("?")[0], new URLSearchParams());
+
+assert.equal(pairServed.status, 200);
+assert.equal(pairServed.headers["content-type"], "image/svg+xml");
+assert.equal((String(pairServed.body).match(/<image /g) || []).length, 2, "the served tile holds both pictures");
+
+/* A remade (dark) logo is embedded as its remade tile, not the unreadable original. */
+assert.match(pairStore.swap(darkFixture), /\/tv\/logo\/p/, "a pair with a remade picture is still a pair");
+
+/* One flag gone: the card falls back to its one logo, never half a tile. */
+assert.doesNotMatch(String(pairStore.swap(brokenFixture)), /\/tv\/logo\/p/, "an incomplete pair is not drawn");
+assert.match(String(pairStore.swap(brokenFixture)), /\/tv\/logo\/u[0-9a-f]{20}\./, "it shows the first logo as before");
+
+/* A hand-made pair URL naming pictures nobody holds is a 404, and the route takes no path. */
+assert.equal(pairStore.serve(`p${"0".repeat(40)}.svg`, new URLSearchParams()).status, 404);
+assert.equal(pairStore.serve("p../../etc.svg", new URLSearchParams()).status, 404);
+
+/* Both pictures count as in use, so tidying keeps them. */
+assert.equal(pairStore.lastPass().channels, 3);
+pairStore.stop();
 
 /* Stopping holds nothing back. */
 redesigned.stop();

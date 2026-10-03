@@ -18,7 +18,7 @@ import type { Client, PageOptions, Tab, VpnStatus } from "./host.js";
  * What swaps a card's logo for the plugin's own stored copy (`logos.ts`),
  * set once by the factory. Unset, a card is exactly what core draws.
  */
-let swapLogo: ((channel: { id: string; name: string; logo: string }) => string | null) | null = null;
+let swapLogo: ((channel: { id: string; name: string; logo: string; logos?: string[] }) => string | null) | null = null;
 
 export function setLogoSwap(swap: typeof swapLogo): void {
     swapLogo = swap;
@@ -42,10 +42,11 @@ export const chanCard = (
         older core ignores the field). A favourite or a recently watched
         entry is only an id, name and logo, so it is looked up.
     */
-    const known = channel.chips ? null : peekChannel(channel.id);
+    const known = peekChannel(channel.id);
     const chips = channel.chips || (known ? regionChips(known, 1) : undefined);
 
-    const swapped = swapLogo ? swapLogo(channel) : null;
+    /* A favourite or a recently watched entry is only an id, name and logo; the pair of flags is the index's to say. */
+    const swapped = swapLogo ? swapLogo(known?.logos ? { ...channel, logos: known.logos } : channel) : null;
     const given = swapped && !channel.logo ? { ...channel, logo: NO_LOGO } : channel;
     const card = host.render.chanCard(client, chips && chips.length ? { ...given, chips } : given, direct, lazy);
 

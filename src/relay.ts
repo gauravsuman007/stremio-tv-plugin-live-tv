@@ -46,7 +46,9 @@ import { host } from "./host.js";
 import { channelIndex, type ChannelStream } from "./channels.js";
 import { allScrapers } from "./scrapers.js";
 import { aimOf } from "./resolve.js";
+import { clearKeyPlaylist, clearKeySegment } from "./clearkey.js";
 
+import type { ClearKey } from "./scraper-types.js";
 import type { LiveFetched } from "./plugin-types.js";
 
 /** What a URL needs from the relay. */
@@ -59,6 +61,9 @@ interface Rule {
      *  what `resolve.ts` needs to turn it into an address. Absent on every
      *  URL a playlist names, which are real addresses already. */
     resolve?: { handle: string; resolver: string; source: string };
+    /** Present on a mirror whose `url` is ClearKey-encrypted DASH
+     *  (`ScrapedStream.clearKey`): served as HLS out of an ffmpeg session. */
+    clearKey?: ClearKey;
     /** When this rule was last confirmed, for expiry. */
     at: number;
 }
@@ -88,8 +93,8 @@ const PEEK = 8 * 1024;
 const rules = new Map<string, Rule>();
 
 /** Whether this mirror needs the relay at all. Most do not. */
-export function needsRelay(stream: Pick<ChannelStream, "referrer" | "userAgent" | "decoder" | "resolver">): boolean {
-    return Boolean(stream.referrer || stream.userAgent || stream.decoder || stream.resolver);
+export function needsRelay(stream: Pick<ChannelStream, "referrer" | "userAgent" | "decoder" | "resolver" | "clearKey">): boolean {
+    return Boolean(stream.referrer || stream.userAgent || stream.decoder || stream.resolver || stream.clearKey);
 }
 
 function ruleOf(stream: ChannelStream): Rule {
@@ -98,6 +103,7 @@ function ruleOf(stream: ChannelStream): Rule {
         userAgent: stream.userAgent,
         decoder: stream.decoder ? { scraper: stream.source, name: stream.decoder } : undefined,
         resolve: stream.resolver ? { handle: stream.url, resolver: stream.resolver, source: stream.source } : undefined,
+        clearKey: stream.clearKey,
         at: Date.now()
     };
 }
@@ -241,6 +247,11 @@ function answer(status: number, url: string, type: string, body: Buffer): LiveFe
  * for -- which is nearly all of them.
  */
 export async function liveFetch(url: string, options: { proxy: string }): Promise<LiveFetched | null> {
+    /* A segment of a ClearKey session names itself; no rule is needed (`clearkey.ts`). */
+    const segment = clearKeySegment(url);
+
+    if (segment) return segment;
+
     const found = await ruleFor(url);
 
     if (!found) return null;
@@ -266,7 +277,22 @@ export async function liveFetch(url: string, options: { proxy: string }): Promis
         if (!aim) return answer(502, url, "text/plain", Buffer.from("This source could not be resolved right now."));
 
         target = aim.url;
-        rule = { ...found, referrer: aim.referrer, userAgent: aim.userAgent, resolve: undefined };
+        rule = { ...found, referrer: aim.referrer, userAgent: aim.userAgent, resolve: undefined, clearKey: aim.clearKey ?? found.clearKey };
+    }
+
+    /*
+        ENCRYPTED DASH: not fetched at all. An ffmpeg session decrypts it to
+        HLS and the answer is that session's playlist; its segments come
+        back as `clearkey.invalid` URLs handled at the top of this function.
+    */
+    if (rule.clearKey) {
+        return clearKeyPlaylist({
+            manifest: target,
+            key: rule.clearKey.key,
+            referrer: rule.referrer,
+            userAgent: rule.userAgent,
+            proxy: options.proxy
+        });
     }
 
     const upstream = await host.fetchVia(target, {

@@ -52,11 +52,12 @@ import { spawn } from "node:child_process";
 
 import { pluginConfig as config } from "./plugin-config.js";
 import { host } from "./host.js";
-import { relayAvailable, resolverAvailable } from "./relay-support.js";
+import { clearKeyApiAvailable, relayAvailable, resolverAvailable } from "./relay-support.js";
+import { ffmpegAvailable, validKey } from "./clearkey.js";
 import { aimOf } from "./resolve.js";
 import { genreLabel, genreOf, languageLabel, languagesOf } from "./taxonomy.js";
 import { allScrapers, beginScraperRun, endScraperRun, lastRun, recordRun, scraperEnabled, scraperStopRequested } from "./scrapers.js";
-import type { ScrapedCatalogue, Scraper } from "./scraper-types.js";
+import type { ClearKey, ScrapedCatalogue, Scraper } from "./scraper-types.js";
 import type { Addon, AddonFailure, MetaDetail, MetaPreview, Sourced, Stream } from "./types.js";
 
 const fetchVia: typeof host.fetchVia = (url, options) => host.fetchVia(url, options);
@@ -80,6 +81,13 @@ export const PREFIX = "iptv:";
  *  running deployment -- see `src/scrapers/iptv-org.ts`. */
 export const LIVE_PREFIX = "live:";
 
+/** Whether this host can play a ClearKey mirror right now. */
+function clearKeyUsable(stream: { clearKey?: ClearKey; decoder?: string }): boolean {
+    return Boolean(
+        stream.clearKey && !stream.decoder && relayAvailable() && clearKeyApiAvailable() && validKey(stream.clearKey.key) && ffmpegAvailable()
+    );
+}
+
 export interface ChannelStream {
     url: string;
     quality: string;
@@ -93,6 +101,9 @@ export interface ChannelStream {
     /** The scraper's named resolver, when `url` is a handle rather than
      *  an address -- see `ScrapedStream.resolver` and `resolve.ts`. */
     resolver?: string;
+    /** Set when `url` is ClearKey-encrypted DASH that this host decrypts to
+     *  HLS -- see `ScrapedStream.clearKey` and `clearkey.ts`. */
+    clearKey?: ClearKey;
     /**
      * The scraper that contributed THIS mirror -- "iptv-org" for the
      * built-in list, otherwise a `Scraper.id`. Set here, once, when a
@@ -122,6 +133,9 @@ export interface Channel {
     /** ISO 639-3 codes, from the channel's main feed. */
     languages: string[];
     logo: string;
+    /** Two pictures drawn side by side on one tile -- a fixture's two flags
+     *  (`ScrapedChannel.logos`). Absent for an ordinary channel. */
+    logos?: string[];
     website: string;
     network: string;
     streams: ChannelStream[];
@@ -433,6 +447,13 @@ async function fromScraper(
                 picture instead of video.
             */
             /*
+                A CLEARKEY MIRROR is encrypted DASH that only this plugin's
+                relay can turn into HLS (an ffmpeg decrypting it), so it
+                needs the relay, a core that never hands it to the
+                television directly (API 1.6.0), an ffmpeg that can do it,
+                and a well-formed key. See `clearkey.ts`.
+            */
+            /*
                 The same goes for a mirror that names a RESOLVER: its `url`
                 is a handle that goes nowhere on its own, and it needs the
                 relay as much as a decoder does (it is the relay that
@@ -442,7 +463,8 @@ async function fromScraper(
             const playable = channel.streams.filter(
                 (stream) =>
                     (!stream.decoder || (relayAvailable() && typeof scraper.decoders?.[stream.decoder] === "function")) &&
-                    (!stream.resolver || (resolverAvailable() && typeof scraper.resolvers?.[stream.resolver] === "function"))
+                    (!stream.resolver || (resolverAvailable() && typeof scraper.resolvers?.[stream.resolver] === "function")) &&
+                    (!stream.clearKey || clearKeyUsable(stream))
             );
 
             if (!playable.length) continue;
@@ -470,6 +492,16 @@ async function fromScraper(
                     seen.add(stream.url);
                     existing.streams.push(stream);
                 }
+
+                /*
+                    THE PICTURE COMES FROM WHICHEVER SOURCE HAS ONE. The
+                    existing card keeps its own id and place, but a card
+                    whose first source had no logo must not stay without one
+                    because a later source did -- and a pair of flags beats a
+                    single picture (`ScrapedChannel.logos`).
+                */
+                if (!existing.logo && channel.logo) existing.logo = channel.logo;
+                if (!existing.logos?.length && channel.logos && channel.logos.length > 1) existing.logos = channel.logos.slice(0, 2);
                 existing.score = scoreOf(
                     existing.streams,
                     existing.categories,
@@ -492,6 +524,7 @@ async function fromScraper(
                 categories: channel.categories,
                 languages: channel.languages,
                 logo: channel.logo,
+                ...(channel.logos && channel.logos.length > 1 ? { logos: channel.logos.slice(0, 2) } : {}),
                 website: channel.website,
                 network: channel.network,
                 streams: taggedStreams,
@@ -1345,6 +1378,20 @@ export async function verify(stream: ChannelStream, proxy = ""): Promise<boolean
 
         if (!aim) throw new Error("unresolvable");
 
+        /*
+            ENCRYPTED DASH IS CHECKED AS FAR AS ITS MANIFEST: reachable and
+            really an MPD. Whether the key is right is found out by playing.
+        */
+        if (aim.clearKey) {
+            const got = await taste(aim.url, { ...stream, referrer: aim.referrer, userAgent: aim.userAgent }, proxy, 64 * 1024);
+
+            ok = got.status < 400 && /<MPD[\s>]/.test(got.text);
+            remember(stream.url, ok);
+            scheduleSave();
+
+            return ok;
+        }
+
         const upstream = await fetchVia(aim.url, {
             proxy,
             headers: {
@@ -1656,6 +1703,9 @@ export async function probeCodec(stream: ChannelStream, proxy = ""): Promise<Cod
 
         if (!aim) return null;
 
+        /* Encrypted DASH is not probed: its copy into HLS is ours, and the codec is whatever it carried. */
+        if (aim.clearKey) return null;
+
         const live: ChannelStream = { ...stream, url: aim.url, referrer: aim.referrer, userAgent: aim.userAgent };
 
         const top = await taste(live.url, live, proxy, 64 * 1024);
@@ -1741,7 +1791,10 @@ export async function deepVerify(stream: ChannelStream, proxy = ""): Promise<boo
 
         const top = await taste(live.url, live, proxy, 64 * 1024);
 
-        if (top.status < 400 && top.text.trimStart().startsWith("#EXTM3U")) {
+        if (aim.clearKey) {
+            /* The manifest is as deep as this goes without spending an ffmpeg per source per night. */
+            ok = top.status < 400 && /<MPD[\s>]/.test(top.text);
+        } else if (top.status < 400 && top.text.trimStart().startsWith("#EXTM3U")) {
             const first = urisIn(top.text, live.url);
             const lists: { url: string; text: string }[] = [];
 
